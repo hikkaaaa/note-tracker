@@ -1,0 +1,305 @@
+import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import TextAlign from '@tiptap/extension-text-align'
+import { TextStyle } from '@tiptap/extension-text-style'
+import { Color } from '@tiptap/extension-color'
+import { Bold, Italic, AlignLeft, AlignCenter, AlignRight, Palette } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+
+const COLORS = ['#0f172a', '#64748b', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ec4899']
+
+interface RichTextEditorProps {
+  content: string
+  onChange: (html: string) => void
+  placeholder?: string
+  className?: string
+  onEnter?: () => void
+  onArrowDown?: () => boolean | void
+  onArrowUp?: () => boolean | void
+}
+
+function focusAdjacentEditor(currentEl: HTMLElement, direction: 1 | -1): boolean {
+  const fields = Array.from(document.querySelectorAll<HTMLElement>('.ProseMirror'))
+  const idx = fields.indexOf(currentEl)
+  if (idx === -1) return false
+  const next = fields[idx + direction]
+  if (!next) return false
+  next.focus()
+  try {
+    const sel = window.getSelection()
+    const range = document.createRange()
+    if (direction === 1) {
+      range.setStart(next, 0)
+    } else {
+      range.selectNodeContents(next)
+      range.collapse(false)
+    }
+    range.collapse(direction === 1)
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  } catch {}
+  return true
+}
+
+export function RichTextEditor({ content, onChange, placeholder, className = '', onEnter, onArrowDown, onArrowUp }: RichTextEditorProps) {
+  const [isFocused, setIsFocused] = useState(false)
+  const [hasSelection, setHasSelection] = useState(false)
+  const [showColorPicker, setShowColorPicker] = useState(false)
+  const [toolbarPos, setToolbarPos] = useState<{ top: number, left: number }>({ top: 0, left: 0 })
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        heading: {
+          levels: [3, 4, 5, 6]
+        },
+        bulletList: false,
+        orderedList: false,
+        horizontalRule: false,
+        blockquote: false,
+        codeBlock: false,
+        dropcursor: false,
+      }),
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
+      TextStyle,
+      Color,
+    ],
+    content,
+    onUpdate: ({ editor }) => {
+      onChange(editor.getHTML())
+    },
+    onFocus: () => setIsFocused(true),
+    onBlur: () => {
+      setTimeout(() => {
+        setIsFocused(false)
+        setShowColorPicker(false)
+      }, 250)
+    },
+    editorProps: {
+      attributes: {
+        class: `focus:outline-none min-h-[1.5em] ${className}`,
+        placeholder: placeholder || '',
+      },
+      handleKeyDown: (view, event) => {
+        if (event.key === 'Enter' && !event.shiftKey && onEnter) {
+          const { state } = view
+          const { selection } = state
+          // Check if cursor is at the end of the doc
+          if (selection.empty && selection.$head.pos === state.doc.content.size - 1) {
+            onEnter()
+            return true
+          }
+        }
+        if (event.key === 'ArrowDown' && !event.shiftKey && view.endOfTextblock('down')) {
+          const handled = onArrowDown ? onArrowDown() : false
+          if (handled === true) return true
+          if (focusAdjacentEditor(view.dom as HTMLElement, 1)) return true
+        }
+        if (event.key === 'ArrowUp' && !event.shiftKey && view.endOfTextblock('up')) {
+          const handled = onArrowUp ? onArrowUp() : false
+          if (handled === true) return true
+          if (focusAdjacentEditor(view.dom as HTMLElement, -1)) return true
+        }
+        return false
+      }
+    },
+  })
+
+  // Prevent internal state updates causing re-renders that reset cursor
+  useEffect(() => {
+    if (editor && editor.getHTML() !== content && !editor.isFocused) {
+      editor.commands.setContent(content)
+    }
+  }, [content, editor])
+
+  // Track cursor/selection position so the toolbar appears above the active text
+  useEffect(() => {
+    if (!editor) return
+    const updatePos = () => {
+      if (!containerRef.current) return
+      try {
+        const { from, empty } = editor.state.selection
+        setHasSelection(!empty)
+        const coords = editor.view.coordsAtPos(from)
+        const rect = containerRef.current.getBoundingClientRect()
+        setToolbarPos({
+          top: coords.top - rect.top,
+          left: Math.max(0, coords.left - rect.left),
+        })
+      } catch {}
+    }
+    updatePos()
+    editor.on('selectionUpdate', updatePos)
+    editor.on('transaction', updatePos)
+    editor.on('focus', updatePos)
+    return () => {
+      editor.off('selectionUpdate', updatePos)
+      editor.off('transaction', updatePos)
+      editor.off('focus', updatePos)
+    }
+  }, [editor])
+
+  return (
+    <div ref={containerRef} className="relative w-full border border-transparent hover:border-slate-100 rounded-lg group transition-colors">
+      {/* Top Toolbar */}
+      {editor && isFocused && (hasSelection || showColorPicker) ? (
+        <div
+          style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateY(calc(-100% - 8px))' }}
+          className="absolute flex flex-wrap items-center gap-1 bg-slate-800 text-white p-1 rounded-lg shadow-xl z-50 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity w-max max-w-full"
+        >
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleBold().run() }}
+            className={`p-1.5 rounded hover:bg-slate-700 ${editor.isActive('bold') ? 'bg-slate-700 text-blue-400' : ''}`}
+          >
+            <Bold className="w-4 h-4" />
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleItalic().run() }}
+            className={`p-1.5 rounded hover:bg-slate-700 ${editor.isActive('italic') ? 'bg-slate-700 text-blue-400' : ''}`}
+          >
+            <Italic className="w-4 h-4" />
+          </button>
+
+          <button
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const { state, view } = editor
+              const { selection, tr } = state
+              const { from, to } = selection
+
+              if (selection.empty) return
+
+              let nodes: Array<{ node: any, pos: number }> = []
+              state.doc.nodesBetween(from, to, (node, pos) => {
+                if (node.isText) {
+                  nodes.push({ node, pos })
+                }
+              })
+
+              if (nodes.length === 0) return
+
+              const fullText = state.doc.textBetween(from, to, ' ')
+              const isUpper = fullText === fullText.toUpperCase()
+              const isLower = fullText === fullText.toLowerCase()
+
+              for (let i = nodes.length - 1; i >= 0; i--) {
+                const { node, pos } = nodes[i]
+                const start = Math.max(pos, from)
+                const end = Math.min(pos + node.nodeSize, to)
+                const text = node.text!.slice(start - pos, end - pos)
+
+                let newText = text
+                if (isUpper) {
+                  newText = text.toLowerCase()
+                } else if (isLower) {
+                  newText = text.replace(/\w\S*/g, (txt: string) => txt.charAt(0).toUpperCase() + txt.substring(1).toLowerCase())
+                } else {
+                  newText = text.toUpperCase()
+                }
+
+                const newNode = state.schema.text(newText, node.marks)
+                tr.replaceWith(start, end, newNode)
+              }
+              view.dispatch(tr)
+            }}
+            className="px-2 py-1.5 rounded hover:bg-slate-700 font-semibold text-sm leading-none flex items-center justify-center transition-colors"
+            title="Toggle Case"
+          >
+            aA
+          </button>
+
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleHeading({ level: 3 }).run() }}
+            className={`px-2 py-1.5 rounded hover:bg-slate-700 font-bold text-sm leading-none flex items-center justify-center transition-colors ${editor.isActive('heading', { level: 3 }) ? 'bg-slate-700 text-blue-400' : ''}`}
+            title="Heading 3"
+          >
+            H3
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleHeading({ level: 4 }).run() }}
+            className={`px-2 py-1.5 rounded hover:bg-slate-700 font-bold text-sm leading-none flex items-center justify-center transition-colors ${editor.isActive('heading', { level: 4 }) ? 'bg-slate-700 text-blue-400' : ''}`}
+            title="Heading 4"
+          >
+            H4
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleHeading({ level: 5 }).run() }}
+            className={`px-2 py-1.5 rounded hover:bg-slate-700 font-bold text-sm leading-none flex items-center justify-center transition-colors ${editor.isActive('heading', { level: 5 }) ? 'bg-slate-700 text-blue-400' : ''}`}
+            title="Heading 5"
+          >
+            H5
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleHeading({ level: 6 }).run() }}
+            className={`px-2 py-1.5 rounded hover:bg-slate-700 font-bold text-sm leading-none flex items-center justify-center transition-colors ${editor.isActive('heading', { level: 6 }) ? 'bg-slate-700 text-blue-400' : ''}`}
+            title="Heading 6"
+          >
+            H6
+          </button>
+          
+          <div className="w-px h-5 bg-slate-600 mx-1" />
+          
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().setTextAlign('left').run() }}
+            className={`p-1.5 rounded hover:bg-slate-700 ${editor.isActive({ textAlign: 'left' }) ? 'bg-slate-700 text-blue-400' : ''}`}
+          >
+            <AlignLeft className="w-4 h-4" />
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().setTextAlign('center').run() }}
+            className={`p-1.5 rounded hover:bg-slate-700 ${editor.isActive({ textAlign: 'center' }) ? 'bg-slate-700 text-blue-400' : ''}`}
+          >
+            <AlignCenter className="w-4 h-4" />
+          </button>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().setTextAlign('right').run() }}
+            className={`p-1.5 rounded hover:bg-slate-700 ${editor.isActive({ textAlign: 'right' }) ? 'bg-slate-700 text-blue-400' : ''}`}
+          >
+            <AlignRight className="w-4 h-4" />
+          </button>
+
+          <div className="w-px h-5 bg-slate-600 mx-1" />
+
+          <div className="relative">
+            <button
+              onMouseDown={(e) => { 
+                e.preventDefault()
+                setShowColorPicker(!showColorPicker)
+              }}
+              className={`p-1.5 rounded hover:bg-slate-700 ${showColorPicker ? 'bg-slate-700 text-blue-400' : ''}`}
+            >
+              <Palette className="w-4 h-4" />
+            </button>
+            
+            {showColorPicker && (
+              <div 
+                className="absolute top-full left-0 mt-2 flex gap-1.5 bg-slate-800 p-2 rounded-lg shadow-2xl z-30"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {COLORS.map(color => (
+                  <button
+                    key={color}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      editor.chain().focus().setColor(color).run()
+                      setShowColorPicker(false)
+                    }}
+                    className="w-5 h-5 rounded-full border border-slate-600 hover:scale-110 transition-transform"
+                    style={{ backgroundColor: color }}
+                    title={`Set color ${color}`}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+      <div className="p-1">
+        <EditorContent editor={editor} />
+      </div>
+    </div>
+  )
+}
