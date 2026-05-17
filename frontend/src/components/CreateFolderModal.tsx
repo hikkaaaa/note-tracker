@@ -1,32 +1,47 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, FolderPlus, Loader2 } from 'lucide-react'
+import { X, FolderPlus } from 'lucide-react'
+import type { FolderColor, LocalFolder } from '../lib/localWorkspace'
 
 interface CreateFolderModalProps {
   isOpen: boolean
   onClose: () => void
+  onSubmit?: (folder: FormState) => void
   onSuccess?: () => void
+  initialFolder?: LocalFolder | null
 }
 
-interface FormState {
+export interface FormState {
   name: string
   purpose: string
-  color: 'blue' | 'red' | 'green'
+  color: FolderColor
 }
 
-export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderModalProps) {
-  const [form, setForm] = useState<FormState>({ name: '', purpose: '', color: 'blue' })
-  const [isLoading, setIsLoading] = useState(false)
+const colorOptions: Array<{ id: FolderColor; label: string; swatch: string; ring: string }> = [
+  { id: 'purple', label: 'Soft Purple', swatch: '#977DFF', ring: 'ring-[#977DFF]/35' },
+  { id: 'pink', label: 'Pastel Pink', swatch: '#FFCCF2', ring: 'ring-[#FFCCF2]' },
+  { id: 'blue', label: 'Original Blue', swatch: '#0033FF', ring: 'ring-[#0033FF]/25' },
+  { id: 'red', label: 'Red', swatch: '#ef4444', ring: 'ring-red-200' },
+  { id: 'green', label: 'Green', swatch: '#10b981', ring: 'ring-emerald-200' },
+]
+
+export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initialFolder }: CreateFolderModalProps) {
+  const [form, setForm] = useState<FormState>({ name: '', purpose: '', color: 'purple' })
   const [error, setError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const isEditing = Boolean(initialFolder)
 
   // Focus the name input when modal opens
   useEffect(() => {
     if (isOpen) {
-      setForm({ name: '', purpose: '', color: 'blue' })
+      setForm({
+        name: initialFolder?.name ?? '',
+        purpose: initialFolder?.purpose ?? '',
+        color: initialFolder?.color ?? 'purple',
+      })
       setError(null)
       setTimeout(() => nameInputRef.current?.focus(), 50)
     }
-  }, [isOpen])
+  }, [initialFolder, isOpen])
 
   // Close on Escape key
   useEffect(() => {
@@ -44,28 +59,13 @@ export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderMo
       return
     }
 
-    setIsLoading(true)
     setError(null)
-
-    try {
-      const response = await fetch('http://localhost:8000/folders/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: form.name.trim(), purpose: form.purpose.trim(), color: form.color }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.detail ?? `Server error (${response.status})`)
-      }
-
+    if (onSubmit) {
+      onSubmit({ name: form.name.trim(), purpose: form.purpose.trim(), color: form.color })
+    } else {
       onSuccess?.()
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-    } finally {
-      setIsLoading(false)
     }
+    onClose()
   }
 
   if (!isOpen) return null
@@ -93,7 +93,7 @@ export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderMo
               <FolderPlus className="w-5 h-5 text-blue-500" />
             </span>
             <h2 id="modal-title" className="text-lg font-semibold text-slate-800">
-              New Folder
+              {isEditing ? 'Edit Folder' : 'New Folder'}
             </h2>
           </div>
           <button
@@ -128,7 +128,7 @@ export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderMo
             {/* Purpose field */}
             <div className="space-y-1.5">
               <label htmlFor="folder-purpose" className="block text-sm font-medium text-slate-700">
-                Purpose
+                Folder Description
                 <span className="ml-1.5 text-xs font-normal text-slate-400">(optional)</span>
               </label>
               <textarea
@@ -144,25 +144,22 @@ export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderMo
             {/* Color field */}
             <div className="space-y-1.5 pt-1">
               <label className="block text-sm font-medium text-slate-700">Folder Color</label>
-              <div className="flex items-center gap-4">
-                {[
-                  { id: 'blue', ring: 'ring-blue-300' },
-                  { id: 'red', ring: 'ring-red-300' },
-                  { id: 'green', ring: 'ring-emerald-300' },
-                ].map((c) => {
-                  const bgDarker = c.id === 'green' ? 'bg-emerald-500' : c.id === 'red' ? 'bg-red-500' : 'bg-blue-500'
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setForm((f) => ({ ...f, color: c.id as any }))}
-                      className={`w-7 h-7 rounded-full shadow-sm transition-all duration-200 ${bgDarker} ${
-                        form.color === c.id ? `ring-4 ring-offset-2 ${c.ring}` : 'opacity-80 hover:opacity-100 hover:scale-110'
-                      }`}
-                      aria-label={`Select ${c.id} color`}
-                    />
-                  )
-                })}
+              <div className="flex flex-wrap items-center gap-3">
+                {colorOptions.map((color) => (
+                  <button
+                    key={color.id}
+                    type="button"
+                    onClick={() => setForm((current) => ({ ...current, color: color.id }))}
+                    className={`h-8 w-8 rounded-full border border-white shadow-sm transition-all duration-200 ${
+                      form.color === color.id
+                        ? `ring-4 ring-offset-2 ${color.ring}`
+                        : 'opacity-85 hover:scale-110 hover:opacity-100'
+                    }`}
+                    style={{ backgroundColor: color.swatch }}
+                    aria-label={`Select ${color.label} color`}
+                    title={color.label}
+                  />
+                ))}
               </div>
             </div>
 
@@ -187,11 +184,9 @@ export function CreateFolderModal({ isOpen, onClose, onSuccess }: CreateFolderMo
             <button
               type="submit"
               id="create-folder-submit-btn"
-              disabled={isLoading}
-              className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-blue-500 rounded-xl hover:bg-blue-600 active:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors duration-150 shadow-sm shadow-blue-200"
+              className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-[#0033FF] rounded-xl hover:bg-[#002be0] active:bg-[#0024bd] transition-colors duration-150 shadow-sm shadow-[#0033FF]/20"
             >
-              {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-              {isLoading ? 'Creating…' : 'Create Folder'}
+              {isEditing ? 'Save Changes' : 'Create Folder'}
             </button>
           </div>
         </form>

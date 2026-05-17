@@ -74,7 +74,7 @@ export function CodeBlock({ content, onChange }: { content: string, onChange: (c
         <div className="p-4 pt-3 overflow-x-auto min-h-[5rem]">
           <Editor
             value={data.code}
-            onValueChange={(code) => update(data.language, code)}
+            onValueChange={(code: string) => update(data.language, code)}
             highlight={highlight}
             padding={0}
             style={{

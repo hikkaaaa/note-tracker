@@ -6,14 +6,15 @@ interface CreateNoteModalProps {
   onClose: () => void
   onSuccess?: () => void
   folderId: string
+  onCreate?: (note: FormState) => void
 }
 
-interface FormState {
+export interface FormState {
   name: string
   purpose: string
 }
 
-export function CreateNoteModal({ isOpen, onClose, onSuccess, folderId }: CreateNoteModalProps) {
+export function CreateNoteModal({ isOpen, onClose, onSuccess, folderId, onCreate }: CreateNoteModalProps) {
   const [form, setForm] = useState<FormState>({ name: '', purpose: '' })
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -44,6 +45,14 @@ export function CreateNoteModal({ isOpen, onClose, onSuccess, folderId }: Create
 
     setIsLoading(true)
     setError(null)
+
+    if (onCreate) {
+      onCreate({ name: form.name.trim(), purpose: form.purpose.trim() })
+      onSuccess?.()
+      onClose()
+      setIsLoading(false)
+      return
+    }
 
     try {
       const response = await fetch(`http://localhost:8000/folders/${folderId}/notes/`, {

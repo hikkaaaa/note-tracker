@@ -1,10 +1,14 @@
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
-import { HomePage } from './pages/HomePage'
+import { LandingPage } from './pages/LandingPage'
+import { LoginPage } from './pages/LoginPage'
+import { Dashboard } from './pages/Dashboard'
 import { FolderDetailPage } from './pages/FolderDetailPage'
 import { NoteEditorPage } from './pages/NoteEditorPage'
 
 const router = createBrowserRouter([
-  { path: '/', element: <HomePage /> },
+  { path: '/', element: <LandingPage /> },
+  { path: '/login', element: <LoginPage /> },
+  { path: '/dashboard', element: <Dashboard /> },
   { path: '/folders/:folderId', element: <FolderDetailPage /> },
   { path: '/notes/:noteId', element: <NoteEditorPage /> },
 ])

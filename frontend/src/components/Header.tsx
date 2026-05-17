@@ -6,13 +6,15 @@ interface HeaderProps {
   actionLabel?: string
   title?: string
   showBackButton?: boolean
+  backTo?: string
 }
 
 export function Header({ 
   onActionClick, 
   actionLabel = 'New Folder', 
   title = 'Home', 
-  showBackButton = false 
+  showBackButton = false,
+  backTo = '/dashboard',
 }: HeaderProps) {
   return (
     <header
@@ -22,9 +24,9 @@ export function Header({
       <div className="flex items-center gap-2.5">
         {showBackButton ? (
           <Link
-            to="/"
+            to={backTo}
             className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors duration-150"
-            aria-label="Go back to Home"
+            aria-label="Go back"
           >
             <ChevronLeft className="w-5 h-5" />
           </Link>

@@ -10,6 +10,7 @@ import { RichTextEditor } from '../components/RichTextEditor'
 import { FormatListBlock } from '../components/FormatListBlock'
 import { TableBlock } from '../components/TableBlock'
 import { CodeBlock } from '../components/CodeBlock'
+import { getLocalNote, getLocalSections, saveLocalSections } from '../lib/localWorkspace'
 
 interface SectionData {
   id: number
@@ -73,9 +74,14 @@ export function NoteEditorPage() {
 
   const fetchNoteAndSections = useCallback(async () => {
     if (!noteId) return
+    const parsedNoteId = parseInt(noteId)
     try {
       const noteRes = await fetch(`http://localhost:8000/notes/${noteId}`)
-      if (noteRes.ok) setNote(await noteRes.json())
+      if (noteRes.ok) {
+        setNote(await noteRes.json())
+      } else {
+        setNote(getLocalNote(parsedNoteId))
+      }
       
       const sectionsRes = await fetch(`http://localhost:8000/notes/${noteId}/sections/`)
       if (sectionsRes.ok) {
@@ -101,9 +107,18 @@ export function NoteEditorPage() {
            setLayoutSectionId(null);
            setLayoutRows(regularSecs.map((s: any) => [s.id]));
         }
+      } else {
+        const localSections = getLocalSections(parsedNoteId)
+        setSections(localSections)
+        setLayoutSectionId(null)
+        setLayoutRows(localSections.map((section) => [section.id]))
       }
     } catch {
-      // ignore
+      const localSections = getLocalSections(parsedNoteId)
+      setNote(getLocalNote(parsedNoteId))
+      setSections(localSections)
+      setLayoutSectionId(null)
+      setLayoutRows(localSections.map((section) => [section.id]))
     } finally {
        setIsLoading(false)
     }
@@ -123,34 +138,46 @@ export function NoteEditorPage() {
     else if (type === 'table') defaultContent = `<table style="width:100%"><tbody><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr></tbody></table>`
     else if (type === 'code') defaultContent = JSON.stringify({ language: '', code: '' })
 
+    const addSectionToLayout = (newSection: SectionData) => {
+      setSections(prev => {
+        const nextSections = [...prev, newSection]
+        saveLocalSections(parseInt(noteId), nextSections)
+        return nextSections
+      })
+      setIsDirty(true)
+      setLayoutRows(prev => {
+          let newLayout = [...prev];
+          if (!targetId) {
+              newLayout.push([newSection.id]);
+              return newLayout;
+          }
+          for (let r = 0; r < newLayout.length; r++) {
+              const row = [...newLayout[r]];
+              const cIndex = row.indexOf(targetId);
+              if (cIndex !== -1) {
+                  if (position === 'left') row.splice(cIndex, 0, newSection.id);
+                  else if (position === 'right') row.splice(cIndex + 1, 0, newSection.id);
+                  else if (position === 'top') { newLayout.splice(r, 0, [newSection.id]); return newLayout; }
+                  else if (position === 'bottom') { newLayout.splice(r + 1, 0, [newSection.id]); return newLayout; }
+                  newLayout[r] = row;
+                  break;
+              }
+          }
+          return newLayout;
+      });
+    }
+
     try {
       const res = await fetch(`http://localhost:8000/notes/${noteId}/sections/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, content: defaultContent }) })
       if (res.ok) {
         const newSection = await res.json()
-        setSections(prev => [...prev, newSection])
-        setIsDirty(true)
-        setLayoutRows(prev => {
-            let newLayout = [...prev];
-            if (!targetId) {
-                newLayout.push([newSection.id]);
-                return newLayout;
-            }
-            for (let r = 0; r < newLayout.length; r++) {
-                const row = [...newLayout[r]]; 
-                const cIndex = row.indexOf(targetId);
-                if (cIndex !== -1) {
-                    if (position === 'left') row.splice(cIndex, 0, newSection.id);
-                    else if (position === 'right') row.splice(cIndex + 1, 0, newSection.id);
-                    else if (position === 'top') { newLayout.splice(r, 0, [newSection.id]); return newLayout; }
-                    else if (position === 'bottom') { newLayout.splice(r + 1, 0, [newSection.id]); return newLayout; }
-                    newLayout[r] = row;
-                    break;
-                }
-            }
-            return newLayout;
-        });
+        addSectionToLayout(newSection)
+      } else {
+        addSectionToLayout({ id: Date.now(), type, content: defaultContent })
       }
-    } catch { console.error('Failed to add section') }
+    } catch {
+      addSectionToLayout({ id: Date.now(), type, content: defaultContent })
+    }
   }
 
   const addSection = (type: any) => addSectionAt(type, null, 'bottom');
@@ -181,7 +208,11 @@ export function NoteEditorPage() {
   }
 
   const updateSectionContentLocal = (id: number, content: string) => {
-    setSections(prev => prev.map(s => s.id === id ? { ...s, content } : s))
+    setSections(prev => {
+      const nextSections = prev.map(s => s.id === id ? { ...s, content } : s)
+      if (noteId) saveLocalSections(parseInt(noteId), nextSections)
+      return nextSections
+    })
     setIsDirty(true)
   }
 
@@ -194,14 +225,27 @@ export function NoteEditorPage() {
     }
     try {
       await fetch(`http://localhost:8000/sections/${id}`, { method: 'DELETE' })
-      setSections(prev => prev.filter(s => s.id !== id))
+      setSections(prev => {
+        const nextSections = prev.filter(s => s.id !== id)
+        if (noteId) saveLocalSections(parseInt(noteId), nextSections)
+        return nextSections
+      })
       setLayoutRows(prev => prev.map(row => row.filter(rid => rid !== id)).filter(row => row.length > 0))
       if (target && rowIndex !== -1) {
         setDeletedStack(prev => [...prev, { type: target.type, content: target.content, rowIndex, colIndex }])
       }
       setIsDirty(true)
     } catch {
-      console.error('Failed to delete section')
+      setSections(prev => {
+        const nextSections = prev.filter(s => s.id !== id)
+        if (noteId) saveLocalSections(parseInt(noteId), nextSections)
+        return nextSections
+      })
+      setLayoutRows(prev => prev.map(row => row.filter(rid => rid !== id)).filter(row => row.length > 0))
+      if (target && rowIndex !== -1) {
+        setDeletedStack(prev => [...prev, { type: target.type, content: target.content, rowIndex, colIndex }])
+      }
+      setIsDirty(true)
     }
   }
 
@@ -252,6 +296,7 @@ export function NoteEditorPage() {
 
   const saveWorkspace = async () => {
     setIsSaving(true)
+    if (noteId) saveLocalSections(parseInt(noteId), sections)
     try {
       await Promise.all(
         sections.map(s => 
@@ -280,7 +325,7 @@ export function NoteEditorPage() {
           }
       }
     } catch {
-      alert('Failed to save some sections.')
+      // Local workspace changes are already saved above when the backend is unavailable.
     } finally {
       setIsSaving(false)
       setIsDirty(false)

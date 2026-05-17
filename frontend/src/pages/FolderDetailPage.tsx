@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { FileText, MoreHorizontal, Search, Trash2 } from 'lucide-react'
 import { CreateNoteModal } from '../components/CreateNoteModal'
+import type { FormState as NoteFormState } from '../components/CreateNoteModal'
 import { ConfirmationModal } from '../components/ConfirmationModal'
 import { Header } from '../components/Header'
+import { createLocalNote, deleteLocalNote, getLocalFolder } from '../lib/localWorkspace'
 
 interface NoteItem {
   id: number
@@ -15,6 +17,7 @@ interface NoteItem {
 interface FolderData {
   id: number
   name: string
+  purpose?: string
   notes: NoteItem[]
 }
 
@@ -27,18 +30,8 @@ export function FolderDetailPage() {
 
   const fetchFolderData = useCallback(async () => {
     if (!folderId) return
-    try {
-      const res = await fetch('http://localhost:8000/folders/')
-      if (res.ok) {
-        const folders: FolderData[] = await res.json()
-        const found = folders.find((f) => f.id === parseInt(folderId))
-        setFolder(found || null)
-      }
-    } catch {
-      // Backend error handling
-    } finally {
-      setIsLoading(false)
-    }
+    setFolder(getLocalFolder(parseInt(folderId)))
+    setIsLoading(false)
   }, [folderId])
 
   useEffect(() => {
@@ -52,6 +45,12 @@ export function FolderDetailPage() {
   )
 
   const handleModalSuccess = () => {
+    fetchFolderData()
+  }
+
+  const handleCreateNote = (form: NoteFormState) => {
+    if (!folderId) return
+    createLocalNote(parseInt(folderId), form.name, form.purpose)
     fetchFolderData()
   }
 
@@ -112,6 +111,7 @@ export function FolderDetailPage() {
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           onSuccess={handleModalSuccess}
+          onCreate={handleCreateNote}
           folderId={folderId}
         />
       )}
@@ -132,12 +132,8 @@ function NoteCard({ note, onDeleteSuccess }: { note: NoteItem, onDeleteSuccess: 
   }, [showMenu])
 
   const handleDelete = async () => {
-    try {
-      const res = await fetch(`http://localhost:8000/notes/${note.id}`, { method: 'DELETE' })
-      if (res.ok) onDeleteSuccess()
-    } catch {
-       // Ignore error
-    }
+    deleteLocalNote(note.id)
+    onDeleteSuccess()
   }
 
   return (
