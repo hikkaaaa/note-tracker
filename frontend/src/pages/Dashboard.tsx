@@ -1,159 +1,405 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Edit3, Folder, MoreHorizontal, Plus, Search, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ConfirmationModal } from '../components/ConfirmationModal'
 import { CreateFolderModal } from '../components/CreateFolderModal'
 import type { FormState as FolderFormState } from '../components/CreateFolderModal'
-import { getLocalFolders, saveLocalFolders } from '../lib/localWorkspace'
-import type { FolderColor, LocalFolder } from '../lib/localWorkspace'
+import { DeleteFolderModal } from '../components/DeleteFolderModal'
+import type { LocalFolder } from '../lib/localWorkspace'
+import { fetchFolders, createFolder, updateFolder, deleteFolder } from '../lib/workspace'
+import { getAuthToken, getAuthUser } from '../lib/authToken'
+import { getSwatch } from '../lib/folderColors'
+import { NotebookPen } from 'lucide-react'
 
-const colorStyles: Record<FolderColor, { back: string; front: string; icon: string }> = {
-  purple: {
-    back: 'from-[#977DFF] to-[#765DFF]',
-    front: 'from-[#977DFF] via-[#866DFF]/95 to-[#0033FF]/75',
-    icon: 'bg-[#977DFF]/12 text-[#977DFF]',
-  },
-  blue: {
-    back: 'from-[#4770FF] to-[#0033FF]',
-    front: 'from-[#4770FF] via-[#2451FF]/95 to-[#0033FF]/80',
-    icon: 'bg-[#0033FF]/10 text-[#0033FF]',
-  },
-  pink: {
-    back: 'from-[#FFCCF2] to-[#977DFF]',
-    front: 'from-[#FF9BE2] via-[#CF8EFF]/95 to-[#977DFF]/85',
-    icon: 'bg-[#FFCCF2]/60 text-[#977DFF]',
-  },
-  red: {
-    back: 'from-red-400 to-red-500',
-    front: 'from-red-500 via-red-400/95 to-rose-400/70',
-    icon: 'bg-red-50 text-red-500',
-  },
-  green: {
-    back: 'from-emerald-400 to-emerald-500',
-    front: 'from-emerald-500 via-emerald-400/95 to-green-400/70',
-    icon: 'bg-emerald-50 text-emerald-500',
-  },
-}
+const bricolage = "'Bricolage Grotesque', sans-serif"
+const geist = "'Geist', ui-sans-serif, sans-serif"
+
+/* ---------- inline icons (match the design 1:1) ---------- */
+const PlusIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+)
+const SearchIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+)
+const GridIcon = ({ size = 15 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+    <rect x="14" y="14" width="7" height="7" rx="1.5" />
+  </svg>
+)
+const ListIcon = ({ size = 15 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="8" y1="6" x2="21" y2="6" />
+    <line x1="8" y1="12" x2="21" y2="12" />
+    <line x1="8" y1="18" x2="21" y2="18" />
+    <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
+    <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
+  </svg>
+)
+const SparkleIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" stroke="none">
+    <path d="M12 2 L13.5 9 L20 10.5 L13.5 12 L12 19 L10.5 12 L4 10.5 L10.5 9 Z" />
+  </svg>
+)
+const MoreIcon = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="5" cy="12" r="1.4" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+    <circle cx="19" cy="12" r="1.4" fill="currentColor" />
+  </svg>
+)
+const EditIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+)
+const TrashIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+  </svg>
+)
+const FolderGlyph = ({ size = 16, color = 'currentColor' }: { size?: number; color?: string }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </svg>
+)
+const BellIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+  </svg>
+)
+
+type ViewMode = 'grid' | 'list'
+
+const NAV_LINKS = ['Folders', 'All notes', 'Shared', 'Trash']
+const FILTERS = ['All', 'Pinned', 'Recent', 'Shared', 'Archive']
 
 export function Dashboard() {
-  const [folders, setFolders] = useState<LocalFolder[]>(() => getLocalFolders())
-  const [searchQuery, setSearchQuery] = useState('')
+  const navigate = useNavigate()
+  const [folders, setFolders] = useState<LocalFolder[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [q, setQ] = useState('')
+  const [view, setView] = useState<ViewMode>('grid')
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false)
   const [editingFolder, setEditingFolder] = useState<LocalFolder | null>(null)
   const [deletingFolder, setDeletingFolder] = useState<LocalFolder | null>(null)
+  const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
 
+  const authUser = getAuthUser()
+
+  // Gate the dashboard behind a session: no token → straight to login.
   useEffect(() => {
-    saveLocalFolders(folders)
-  }, [folders])
+    if (!getAuthToken()) navigate('/login', { replace: true })
+  }, [navigate])
 
-  const filteredFolders = useMemo(() => {
-    const query = searchQuery.toLowerCase()
+  // Load the signed-in user's folders from the backend.
+  useEffect(() => {
+    if (!getAuthToken()) return
+    let cancelled = false
+    setLoading(true)
+    fetchFolders()
+      .then((data) => { if (!cancelled) { setFolders(data); setLoadError('') } })
+      .catch((err) => { if (!cancelled) setLoadError(err?.message ?? 'Could not load your folders.') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const filtered = useMemo(() => {
+    const k = q.trim().toLowerCase()
+    if (!k) return folders
     return folders.filter(
       (folder) =>
-        folder.name.toLowerCase().includes(query) ||
-        folder.purpose.toLowerCase().includes(query),
+        folder.name.toLowerCase().includes(k) || folder.purpose.toLowerCase().includes(k),
     )
-  }, [folders, searchQuery])
+  }, [folders, q])
+
+  const totalNotes = folders.reduce((sum, folder) => sum + folder.notes.length, 0)
 
   const openCreateFolder = () => {
     setEditingFolder(null)
     setIsFolderModalOpen(true)
   }
 
-  const openEditFolder = (folder: LocalFolder) => {
-    setEditingFolder(folder)
-    setIsFolderModalOpen(true)
-  }
-
-  const handleFolderSubmit = (form: FolderFormState) => {
+  const handleFolderSubmit = async (form: FolderFormState) => {
     if (editingFolder) {
-      setFolders((currentFolders) =>
-        currentFolders.map((folder) =>
-          folder.id === editingFolder.id
-            ? { ...folder, name: form.name, purpose: form.purpose, color: form.color }
-            : folder,
-        ),
-      )
+      const editId = editingFolder.id
+      try {
+        const updated = await updateFolder(editId, form)
+        // Preserve the existing notes (the update response carries them too, but keep the
+        // in-memory list authoritative for note counts shown on the card).
+        setFolders((current) =>
+          current.map((folder) =>
+            folder.id === editId ? { ...updated, notes: folder.notes } : folder,
+          ),
+        )
+      } catch (err) {
+        setLoadError((err as Error)?.message ?? 'Could not update the folder.')
+      }
       return
     }
-
-    const nextFolder: LocalFolder = {
-      id: Date.now(),
-      name: form.name,
-      purpose: form.purpose,
-      color: form.color,
-      notes: [],
+    try {
+      const created = await createFolder(form)
+      setFolders((current) => [created, ...current])
+    } catch (err) {
+      setLoadError((err as Error)?.message ?? 'Could not create the folder.')
     }
-    setFolders((currentFolders) => [nextFolder, ...currentFolders])
   }
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!deletingFolder) return
-    setFolders((currentFolders) => currentFolders.filter((folder) => folder.id !== deletingFolder.id))
+    const delId = deletingFolder.id
+    try {
+      await deleteFolder(delId)
+      setFolders((current) => current.filter((folder) => folder.id !== delId))
+    } catch (err) {
+      setLoadError((err as Error)?.message ?? 'Could not delete the folder.')
+    }
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f8fc] text-slate-950">
-      <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/85 px-6 py-4 shadow-sm backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#977DFF] text-white shadow-lg shadow-[#977DFF]/25">
-              <Folder className="h-5 w-5" />
+    <div
+      className="relative min-h-screen overflow-x-hidden"
+      style={{ background: '#FBF7F2', color: '#1B1326', fontFamily: geist }}
+    >
+      {/* background halos + grid */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div className="absolute rounded-full" style={{ width: 600, height: 600, top: -120, left: -160, background: 'rgba(219,62,140,0.08)', filter: 'blur(90px)' }} />
+        <div className="absolute rounded-full" style={{ width: 720, height: 720, top: '25%', right: -240, background: 'rgba(119,88,163,0.10)', filter: 'blur(90px)' }} />
+        <div className="absolute rounded-full" style={{ width: 500, height: 500, bottom: -180, left: '30%', background: 'rgba(246,196,92,0.08)', filter: 'blur(90px)' }} />
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(27,19,38,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(27,19,38,0.08) 1px, transparent 1px)',
+            backgroundSize: '60px 60px',
+            maskImage: 'radial-gradient(ellipse at center, black 25%, transparent 75%)',
+            WebkitMaskImage: 'radial-gradient(ellipse at center, black 25%, transparent 75%)',
+            opacity: 0.5,
+          }}
+        />
+      </div>
+
+      <div className="relative z-[1] mx-auto max-w-[1440px] px-5 pb-16 pt-5 sm:px-10 sm:pb-20 sm:pt-7">
+        {/* topbar */}
+        <header className="relative z-[5] mb-9 grid grid-cols-[1fr_auto] items-center gap-6 md:grid-cols-[1fr_auto_1fr]">
+          <a href="/" className="flex items-center gap-3 no-underline" style={{ color: '#1B1326' }}>
+            <span
+              className="flex h-11 w-11 items-center justify-center rounded-[14px]"
+              style={{ background: 'linear-gradient(135deg, #8B5CF6, #DB3E8C)', boxShadow: '0 6px 14px rgba(119,88,163,0.28)' }}
+            >
+              <NotebookPen size={24} strokeWidth={2.2} className="text-white" />
             </span>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">Folders</h1>
+            <span className="text-[18px] font-bold tracking-[-0.01em]">
+              hixie<span style={{ color: '#EC4899' }}>.</span>
+            </span>
+          </a>
+
+          <nav className="hidden gap-0.5 rounded-full border border-[#1B1326]/[0.08] bg-white p-1.5 shadow-[0_12px_30px_-18px_rgba(27,19,38,0.18)] md:flex">
+            {NAV_LINKS.map((link) => (
+              <a
+                key={link}
+                href="#"
+                className={`rounded-full px-[18px] py-2.5 text-sm font-medium no-underline transition-colors ${
+                  link === 'Folders'
+                    ? 'bg-[#1B1326] text-[#FBF7F2]'
+                    : 'text-[#1B1326] hover:bg-[#7758A3]/[0.08]'
+                }`}
+              >
+                {link}
+              </a>
+            ))}
+          </nav>
+
+          <div className="flex items-center gap-2.5 justify-self-end">
+            <button
+              type="button"
+              aria-label="Notifications"
+              className="relative grid h-[42px] w-[42px] place-items-center rounded-full border border-[#1B1326]/[0.08] bg-white text-[#1B1326] shadow-[0_8px_22px_-16px_rgba(27,19,38,0.2)] transition-transform hover:-translate-y-px"
+            >
+              <BellIcon />
+              <span className="absolute right-[11px] top-[9px] h-2 w-2 rounded-full bg-[#EC4899] ring-2 ring-white" />
+            </button>
+            <a
+              href="#"
+              className="inline-flex items-center gap-2.5 rounded-full border border-[#1B1326]/[0.08] bg-white py-[5px] pl-[5px] pr-4 text-sm font-semibold no-underline shadow-[0_8px_22px_-16px_rgba(27,19,38,0.2)] transition-transform hover:-translate-y-px"
+              style={{ color: '#1B1326' }}
+            >
+              <span
+                className="grid h-8 w-8 place-items-center rounded-full text-[13px] font-bold text-white"
+                style={{ background: 'linear-gradient(135deg, #8B5CF6, #EC4899)', fontFamily: bricolage }}
+              >
+                {(authUser?.nickname?.[0] ?? '?').toUpperCase()}
+              </span>
+              <span className="hidden sm:inline">{authUser?.nickname ?? 'Account'}</span>
+            </a>
           </div>
+        </header>
 
-          <button
-            type="button"
-            onClick={openCreateFolder}
-            className="flex h-11 items-center gap-2 rounded-2xl bg-[#0033FF] px-5 text-sm font-bold text-white shadow-lg shadow-[#0033FF]/20 transition-transform hover:-translate-y-0.5"
-          >
-            <Plus className="h-4 w-4" />
-            <span>New Folder</span>
-          </button>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-6xl px-6 py-12">
-        <div className="mb-10 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        {/* hero header */}
+        <section className="relative z-[3] mb-8 grid grid-cols-1 items-end gap-8 lg:grid-cols-[1fr_auto]">
           <div>
-            <p className="mb-3 inline-flex rounded-full bg-[#FFCCF2]/55 px-4 py-1.5 text-sm font-bold text-[#5f48d7]">
-              Your organized space
-            </p>
-            <h2 className="text-4xl font-extrabold tracking-tight text-slate-950">My Folders</h2>
-            <p className="mt-2 text-base font-medium text-slate-500">
-              {folders.length} folder{folders.length !== 1 ? 's' : ''}
+            <h1
+              className="m-0 font-extrabold leading-[1.05] tracking-[-0.035em]"
+              style={{ fontFamily: bricolage, fontSize: 'clamp(40px, 6.4vw, 84px)' }}
+            >
+              My Folders
+              <span
+                className="inline-block bg-clip-text text-transparent"
+                style={{ backgroundImage: 'linear-gradient(120deg, #8B5CF6, #EC4899)' }}
+              >
+                .
+              </span>
+            </h1>
+            <p className="mt-[18px] text-sm tracking-[-0.005em] text-[#6E5F7B]" style={{ fontFamily: "'Geist Mono', monospace" }}>
+              <b className="font-semibold text-[#1B1326]">{folders.length}</b> folder{folders.length !== 1 ? 's' : ''}
+              <span className="mx-3 inline-block h-1 w-1 -translate-y-px rounded-full bg-[#6E5F7B] opacity-50 align-middle" />
+              <b className="font-semibold text-[#1B1326]">{totalNotes}</b> note{totalNotes !== 1 ? 's' : ''}
             </p>
           </div>
 
-          <div className="relative w-full sm:w-80">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-            <input
-              id="folder-search"
-              type="text"
-              placeholder="Search folders..."
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              className="h-13 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 text-base font-medium text-slate-700 outline-none shadow-sm transition-all placeholder:text-slate-400 focus:border-[#977DFF] focus:ring-4 focus:ring-[#977DFF]/15"
-            />
-          </div>
-        </div>
-
-        {filteredFolders.length === 0 ? (
-          <EmptyState searchQuery={searchQuery} />
-        ) : (
-          <div id="folders-grid" className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredFolders.map((folder) => (
-              <FolderCard
-                key={folder.id}
-                folder={folder}
-                onEdit={openEditFolder}
-                onDelete={setDeletingFolder}
+          <div className="flex flex-col gap-2.5 lg:min-w-[340px]">
+            <div className="flex items-center gap-2.5 rounded-[14px] border-[1.5px] border-[#1B1326]/[0.08] bg-white px-3.5 py-3 shadow-[0_10px_28px_-16px_rgba(27,19,38,0.18)] transition-all focus-within:border-[#8B5CF6] focus-within:ring-4 focus-within:ring-[#7758A3]/[0.12]">
+              <span className="grid place-items-center text-[#6E5F7B]"><SearchIcon /></span>
+              <input
+                id="folder-search"
+                type="text"
+                placeholder="Search folders, tags, notes…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#6E5F7B]"
               />
+              <span className="rounded-md border border-[#1B1326]/[0.08] bg-[#FBF7F2] px-[7px] py-[3px] text-[11px] text-[#6E5F7B]" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                ⌘ K
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={openCreateFolder}
+              className="inline-flex items-center justify-center gap-2.5 rounded-full bg-[#1B1326] py-[13px] pl-2 pr-[22px] text-sm font-semibold text-[#FBF7F2] shadow-[0_14px_30px_-16px_rgba(27,19,38,0.5)] transition-transform hover:-translate-y-px"
+            >
+              <span className="grid h-[30px] w-[30px] place-items-center rounded-full bg-[#F59E0B] text-[#1B1326]">
+                <PlusIcon size={13} />
+              </span>
+              New folder
+            </button>
+          </div>
+        </section>
+
+        {/* filter row */}
+        <div className="relative z-[3] mb-7 flex flex-col items-stretch justify-between gap-3 border-b border-dashed border-[#1B1326]/[0.08] pb-[18px] sm:flex-row sm:items-center sm:gap-[18px]">
+          <div className="flex flex-wrap gap-1.5">
+            {FILTERS.map((label) => {
+              const on = label === 'All'
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[13px] font-medium transition-colors ${
+                    on
+                      ? 'border-[#1B1326]/[0.08] bg-white text-[#1B1326] shadow-[0_6px_18px_-12px_rgba(27,19,38,0.18)]'
+                      : 'border-transparent text-[#6E5F7B] hover:bg-[#7758A3]/[0.06] hover:text-[#1B1326]'
+                  }`}
+                >
+                  {label === 'Pinned' && <SparkleIcon size={11} />}
+                  {label}
+                  {on && (
+                    <span className="rounded-full bg-[#7758A3]/10 px-1.5 py-0.5 text-[11px] text-[#8B5CF6]" style={{ fontFamily: "'Geist Mono', monospace" }}>
+                      {folders.length}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex gap-0.5 self-end rounded-[10px] border border-[#1B1326]/[0.08] bg-white p-[3px] sm:self-auto">
+            {(['grid', 'list'] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setView(mode)}
+                aria-label={mode === 'grid' ? 'Grid view' : 'List view'}
+                className={`grid place-items-center rounded-[7px] px-2.5 py-[7px] transition-colors ${
+                  view === mode ? 'bg-[#1B1326] text-[#FBF7F2]' : 'text-[#6E5F7B] hover:text-[#1B1326]'
+                }`}
+              >
+                {mode === 'grid' ? <GridIcon /> : <ListIcon />}
+              </button>
             ))}
           </div>
+        </div>
+
+        {loadError && (
+          <div className="relative z-[3] mb-5 rounded-xl border border-[#DB3E8C]/25 bg-[#DB3E8C]/[0.07] px-4 py-3 text-sm font-medium text-[#B91C57]">
+            {loadError}
+          </div>
         )}
-      </main>
+
+        {loading && (
+          <div className="relative z-[2] flex items-center justify-center gap-3 py-20 text-[#6E5F7B]">
+            <span className="h-5 w-5 animate-spin rounded-full border-[2.5px] border-[#7758A3]/25 border-t-[#7758A3]" />
+            Loading your folders…
+          </div>
+        )}
+
+        {/* folder grid / list */}
+        {!loading && (
+        <main
+          className={
+            view === 'grid'
+              ? 'relative z-[2] grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+              : 'relative z-[2] flex flex-col gap-2.5'
+          }
+        >
+          {filtered.map((folder) => (
+            <FolderCard
+              key={folder.id}
+              folder={folder}
+              view={view}
+              menuOpen={menuOpenId === folder.id}
+              onMenuToggle={() => setMenuOpenId((id) => (id === folder.id ? null : folder.id))}
+              onMenuClose={() => setMenuOpenId(null)}
+              onEdit={() => {
+                setEditingFolder(folder)
+                setIsFolderModalOpen(true)
+                setMenuOpenId(null)
+              }}
+              onDelete={() => {
+                setDeletingFolder(folder)
+                setMenuOpenId(null)
+              }}
+            />
+          ))}
+          <NewFolderTile view={view} onClick={openCreateFolder} />
+        </main>
+        )}
+
+        {!loading && filtered.length === 0 && q.trim() && (
+          <div className="relative z-[2] py-[60px] text-center text-[#6E5F7B]">
+            <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-[18px] border border-[#1B1326]/[0.08] bg-white">
+              <FolderGlyph size={28} color="#8B5CF6" />
+            </div>
+            <p>
+              No folders match "<b className="text-[#1B1326]">{q}</b>". Try a different search.
+            </p>
+          </div>
+        )}
+      </div>
 
       <CreateFolderModal
         isOpen={isFolderModalOpen}
@@ -162,128 +408,206 @@ export function Dashboard() {
         onSubmit={handleFolderSubmit}
       />
 
-      <ConfirmationModal
-        isOpen={Boolean(deletingFolder)}
-        onClose={() => setDeletingFolder(null)}
-        onConfirm={handleConfirmDelete}
-        title="Delete Folder"
-        message={`Are you sure you want to delete the folder ${deletingFolder?.name ?? ''}?`}
-      />
+      {deletingFolder && (
+        <DeleteFolderModal
+          folder={deletingFolder}
+          onClose={() => setDeletingFolder(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
     </div>
   )
 }
 
+/* ---------- folder card ---------- */
 function FolderCard({
   folder,
+  view,
+  menuOpen,
+  onMenuToggle,
+  onMenuClose,
   onEdit,
   onDelete,
 }: {
   folder: LocalFolder
-  onEdit: (folder: LocalFolder) => void
-  onDelete: (folder: LocalFolder) => void
+  view: ViewMode
+  menuOpen: boolean
+  onMenuToggle: () => void
+  onMenuClose: () => void
+  onEdit: () => void
+  onDelete: () => void
 }) {
   const navigate = useNavigate()
-  const [showMenu, setShowMenu] = useState(false)
-  const styles = colorStyles[folder.color]
+  const sw = getSwatch(folder.color)
+  const noteCount = folder.notes.length
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!showMenu) return
-    const closeMenu = () => setShowMenu(false)
-    window.addEventListener('click', closeMenu)
-    return () => window.removeEventListener('click', closeMenu)
-  }, [showMenu])
+    if (!menuOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onMenuClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMenuClose()
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen, onMenuClose])
+
+  const open = () => navigate(`/folders/${folder.id}`)
+
+  const menu = (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        aria-label={`${folder.name} options`}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onMenuToggle()
+        }}
+        className={`grid h-9 w-9 place-items-center rounded-xl transition-colors ${
+          menuOpen ? 'bg-white/[0.22] text-white' : 'text-white/85 hover:bg-white/[0.18] hover:text-white'
+        }`}
+      >
+        <MoreIcon size={18} />
+      </button>
+      {menuOpen && (
+        <div
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-[calc(100%+8px)] right-0 z-50 flex min-w-[156px] flex-col gap-0.5 rounded-xl border border-[#1B1326]/[0.08] bg-white p-1.5 text-[#1B1326] shadow-[0_10px_24px_-8px_rgba(27,19,38,0.18),0_24px_60px_-20px_rgba(27,19,38,0.30)] animate-modal-in"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEdit() }}
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-semibold transition-colors hover:bg-[#7758A3]/[0.08]"
+          >
+            <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-[#7758A3]/10 text-[#8B5CF6]">
+              <EditIcon size={14} />
+            </span>
+            Edit
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete() }}
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-semibold text-[#B91C1C] transition-colors hover:bg-[#DC2626]/[0.08]"
+          >
+            <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-[#DC2626]/10 text-[#DC2626]">
+              <TrashIcon size={14} />
+            </span>
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+
+  if (view === 'list') {
+    return (
+      <article
+        onClick={open}
+        className="relative flex min-h-[76px] w-full cursor-pointer items-center gap-[18px] rounded-[18px] px-5 py-3.5 text-white"
+        style={{ background: sw.back }}
+      >
+        <h3 className="m-0 truncate text-[18px] font-extrabold tracking-[-0.02em]" style={{ fontFamily: bricolage }}>
+          {folder.name}
+        </h3>
+        <p className="m-0 hidden max-w-[380px] flex-1 truncate text-[13px] font-semibold text-white/85 sm:block">
+          {folder.purpose}
+        </p>
+        <p className="m-0 ml-auto whitespace-nowrap text-[13px] font-bold text-white/90">
+          {noteCount} {noteCount === 1 ? 'note' : 'notes'}
+        </p>
+        {menu}
+      </article>
+    )
+  }
 
   return (
     <article
-      onClick={() => navigate(`/folders/${folder.id}`)}
-      className="group relative h-64 w-full cursor-pointer overflow-hidden rounded-[1.75rem] shadow-sm transition-all duration-300 hover:-translate-y-1.5 hover:shadow-2xl hover:shadow-[#977DFF]/15"
+      onClick={open}
+      className="folder-card-3d group relative h-[220px] w-full cursor-pointer overflow-hidden rounded-[24px] shadow-[0_1px_3px_rgba(27,19,38,0.06)]"
+      style={{ ['--fhalo' as string]: sw.halo } as React.CSSProperties}
     >
-      <div className={`absolute inset-x-0 bottom-0 h-[88%] rounded-[1.75rem] bg-gradient-to-br ${styles.back}`} />
+      {/* 1. back gradient */}
+      <div className="absolute inset-x-0 bottom-0 h-[88%] rounded-[24px]" style={{ background: sw.back }} />
 
-      <div className="absolute inset-x-7 top-5 z-10 h-26 rounded-t-2xl rounded-b-lg border border-white/80 bg-white shadow-xl shadow-slate-900/5 transition-transform duration-300 group-hover:-translate-y-2">
-        <div className="space-y-2 p-5 opacity-55">
-          <div className="h-2 w-2/3 rounded-full bg-slate-200" />
-          <div className="h-2 w-full rounded-full bg-slate-200" />
-          <div className="h-2 w-4/5 rounded-full bg-slate-200" />
-        </div>
+      {/* 2. white note peeking out */}
+      <div className="folder-note-peek absolute left-[22px] right-[22px] top-4 z-10 flex h-[86px] flex-col gap-2 rounded-t-2xl rounded-b-lg border border-white/80 bg-white p-4 shadow-[0_20px_25px_-5px_rgba(15,23,42,0.08),0_8px_10px_-6px_rgba(15,23,42,0.05)]">
+        <span className="h-[7px] w-2/3 rounded-full bg-slate-200/70" />
+        <span className="h-[7px] w-full rounded-full bg-slate-200/70" />
+        <span className="h-[7px] w-4/5 rounded-full bg-slate-200/70" />
       </div>
 
+      {/* 3. front gradient with tab notch */}
       <div
-        className={`absolute inset-x-0 bottom-0 z-20 h-[66%] overflow-hidden rounded-b-[1.75rem] bg-gradient-to-t ${styles.front} shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]`}
-        style={{ clipPath: 'polygon(0 0, 40% 0, 55% 16%, 100% 16%, 100% 100%, 0 100%)' }}
+        className="absolute inset-x-0 bottom-0 z-20 h-[66%] overflow-hidden rounded-b-[24px] shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]"
+        style={{ background: sw.front, clipPath: 'polygon(0 0, 40% 0, 55% 16%, 100% 16%, 100% 100%, 0 100%)' }}
       />
 
-      <div className="absolute inset-0 z-30 flex flex-col justify-end p-6">
-        <div className="mb-5 flex items-center justify-between">
-          <span className={`flex h-11 w-11 items-center justify-center rounded-2xl bg-white/95 ${styles.icon}`}>
-            <Folder className="h-5 w-5" />
-          </span>
-          <div className="relative">
-            <button
-              type="button"
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-white/80 transition-colors hover:bg-white/15 hover:text-white"
-              aria-label={`${folder.name} options`}
-              aria-expanded={showMenu}
-              onClick={(event) => {
-                event.stopPropagation()
-                setShowMenu((current) => !current)
-              }}
-            >
-              <MoreHorizontal className="h-5 w-5" />
-            </button>
-
-            {showMenu && (
-              <div
-                className="absolute bottom-full right-0 z-50 mb-2 w-36 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-slate-200 animate-modal-in"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMenu(false)
-                    onEdit(folder)
-                  }}
-                  className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                >
-                  <Edit3 className="h-4 w-4" />
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMenu(false)
-                    onDelete(folder)
-                  }}
-                  className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Delete
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <h3 className="truncate text-2xl font-extrabold tracking-tight text-white">{folder.name}</h3>
-        <p className="mt-1 line-clamp-1 text-sm font-semibold text-white/80">{folder.purpose}</p>
-        <p className="mt-4 text-sm font-bold text-white/90">
-          {folder.notes.length} note{folder.notes.length !== 1 ? 's' : ''}
+      {/* 4. content */}
+      <div className="absolute inset-0 z-30 flex flex-col justify-end p-5 text-white">
+        <h3 className="m-0 truncate text-[22px] font-extrabold leading-[1.1] tracking-[-0.025em]" style={{ fontFamily: bricolage }}>
+          {folder.name}
+        </h3>
+        <p className="m-0 mt-1 truncate text-[13px] font-semibold text-white/85">{folder.purpose}</p>
+        <p className="m-0 mt-3 text-[13px] font-bold text-white/90">
+          {noteCount} {noteCount === 1 ? 'note' : 'notes'}
         </p>
       </div>
+
+      {/* more menu — bottom-right */}
+      <div className="absolute bottom-4 right-4 z-40">{menu}</div>
     </article>
   )
 }
 
-function EmptyState({ searchQuery }: { searchQuery: string }) {
+/* ---------- new folder tile ---------- */
+function NewFolderTile({ view, onClick }: { view: ViewMode; onClick: () => void }) {
+  if (view === 'list') {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="flex w-full items-center gap-3.5 rounded-[18px] border-[1.5px] border-dashed border-[#7758A3]/30 px-5 py-3.5 text-left transition-colors hover:border-[#8B5CF6]"
+        style={{ background: 'rgba(255,255,255,0.5)' }}
+      >
+        <span className="grid h-[38px] w-[38px] place-items-center rounded-full bg-[#1B1326] text-[#FBF7F2]">
+          <PlusIcon size={18} />
+        </span>
+        <span className="text-[18px] font-extrabold tracking-[-0.02em]" style={{ fontFamily: bricolage }}>
+          New folder
+        </span>
+        <span className="text-xs text-[#6E5F7B]">Group notes by topic, project, or vibe</span>
+      </button>
+    )
+  }
+
   return (
-    <div className="flex min-h-80 flex-col items-center justify-center rounded-[1.75rem] border border-dashed border-[#977DFF]/30 bg-white text-center">
-      <span className="mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-[#FFCCF2]/55 text-[#977DFF]">
-        <Folder className="h-8 w-8" />
-      </span>
-      <h3 className="text-xl font-bold text-slate-800">No matching folders</h3>
-      <p className="mt-2 max-w-xs text-sm font-medium text-slate-500">
-        Nothing matched “{searchQuery}”. Try a different search term.
-      </p>
-    </div>
+    <button type="button" onClick={onClick} className="group h-[220px] w-full text-left">
+      <div
+        className="flex h-full flex-col items-center justify-center gap-2 rounded-[24px] border-[1.5px] border-dashed border-[#7758A3]/30 p-4 text-center transition-colors group-hover:border-[#8B5CF6]"
+        style={{ background: 'radial-gradient(circle at top left, rgba(119,88,163,0.06), transparent 50%), rgba(255,255,255,0.5)' }}
+      >
+        <span className="mb-1 grid h-12 w-12 place-items-center rounded-full bg-[#1B1326] text-[#FBF7F2] shadow-[0_10px_22px_-10px_rgba(27,19,38,0.5)]">
+          <PlusIcon size={22} />
+        </span>
+        <span className="text-[20px] font-extrabold tracking-[-0.02em] text-[#1B1326]" style={{ fontFamily: bricolage }}>
+          New folder
+        </span>
+        <span className="max-w-[200px] text-xs leading-snug text-[#6E5F7B]">
+          Group notes by topic, project, or vibe
+        </span>
+      </div>
+    </button>
   )
 }

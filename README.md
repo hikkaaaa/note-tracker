@@ -1,7 +1,8 @@
-setting up the backend (on anoter terminal): 
+setting up the backend (on another terminal): 
 cd backend
 python3 -m venv venv
-pip install fastapi uvicorn sqlalchemy pydantic
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
 setting up the front: 
 root folder: 
@@ -26,15 +27,26 @@ export default defineConfig({
 
 running the back: 
 cd backend
+source venv/bin/activate          # Windows: venv\Scripts\activate  (skip if already active)
 uvicorn app.main:app --reload
 localhost: http://localhost:8000
 backend endpoints check: http://localhost:8000/docs
+
+auth / env vars (backend):
+The JWT signing secret is read from the AUTH_SECRET_KEY env var. A dev fallback is
+baked in so local dev works with no setup, but set a real secret in any deployed env:
+  export AUTH_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+Run that in the same shell before `uvicorn`, or add it to your shell profile / .env.
 
 running the front: 
 cd frontend
 npm run dev
 localhost: http://localhost:5173
 frontend check: http://localhost:5173 -> browser's Developer Tools (F12) -> "Network" tab -> ensure your frontend is successfully sending data to http://localhost:8000
+
+frontend env vars (optional):
+The backend URL defaults to http://localhost:8000. To point the frontend elsewhere,
+copy frontend/.env.example to frontend/.env and set VITE_API_BASE.
 
 
 note-tracker/
@@ -59,7 +71,8 @@ note-tracker/
     │   ├── models.py         # SQLAlchemy database models (tables)
     │   ├── schemas.py        # Pydantic models (data validation for endpoints)
     │   └── database.py       # SQLite connection setup
-    ├── requirements.txt      # Python dependencies (fastapi, uvicorn, sqlalchemy)
+    ├── requirements.txt      # Pinned Python deps (fastapi, uvicorn, sqlalchemy, pydantic, bcrypt, PyJWT, email-validator)
+    ├── venv/                 # Local virtualenv — run everything from here (gitignored)
     └── note_tracker.db       # Your SQLite DB file (auto-generates later)
 
 frontend/api: 
@@ -70,7 +83,7 @@ Step 1: Set up the Backend (Python/FastAPI)
 
 Navigate to the backend folder and create a virtual environment: python -m venv venv
 
-Activate it and install dependencies: pip install fastapi uvicorn sqlalchemy pydantic
+Activate it (source venv/bin/activate) and install dependencies: pip install -r requirements.txt
 
 In database.py, set up your SQLite connection engine.
 

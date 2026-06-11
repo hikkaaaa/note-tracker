@@ -1,0 +1,102 @@
+// Backend-backed workspace data layer. Folders, notes and their sections live in the
+// FastAPI/SQLite backend, scoped to the logged-in user — this module is the typed,
+// authenticated bridge the pages use instead of touching localStorage. Responses are
+// mapped to the existing Local* shapes so the UI components render unchanged.
+import { authedFetch } from './api'
+import { normalizeFolderColor } from './localWorkspace'
+import type { FolderColor, LocalFolder, LocalNote } from './localWorkspace'
+
+interface ApiNote {
+  id: number
+  title: string
+  purpose?: string | null
+  folder_id: number
+}
+
+interface ApiFolder {
+  id: number
+  name: string
+  purpose?: string | null
+  color?: string | null
+  notes?: ApiNote[]
+}
+
+// The backend has no per-note created_at/color column yet, so notes carry an empty
+// created_at (the UI falls back gracefully) and inherit their folder's color.
+function mapNote(n: ApiNote): LocalNote {
+  return { id: n.id, title: n.title, purpose: n.purpose ?? undefined, created_at: '' }
+}
+
+function mapFolder(f: ApiFolder): LocalFolder {
+  return {
+    id: f.id,
+    name: f.name,
+    purpose: f.purpose ?? '',
+    color: normalizeFolderColor(f.color ?? undefined),
+    notes: (f.notes ?? []).map(mapNote),
+  }
+}
+
+export async function fetchFolders(): Promise<LocalFolder[]> {
+  const res = await authedFetch('/folders/')
+  if (!res.ok) throw new Error('Could not load your folders.')
+  const data = (await res.json()) as ApiFolder[]
+  return data.map(mapFolder)
+}
+
+export async function fetchFolder(id: number): Promise<LocalFolder | null> {
+  const res = await authedFetch(`/folders/${id}`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error('Could not load that folder.')
+  return mapFolder(await res.json())
+}
+
+export async function createFolder(input: {
+  name: string
+  purpose: string
+  color: FolderColor
+}): Promise<LocalFolder> {
+  const res = await authedFetch('/folders/', { method: 'POST', body: JSON.stringify(input) })
+  if (!res.ok) throw new Error('Could not create the folder.')
+  return mapFolder(await res.json())
+}
+
+export async function updateFolder(
+  id: number,
+  patch: { name?: string; purpose?: string; color?: FolderColor },
+): Promise<LocalFolder> {
+  const res = await authedFetch(`/folders/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
+  if (!res.ok) throw new Error('Could not update the folder.')
+  return mapFolder(await res.json())
+}
+
+export async function deleteFolder(id: number): Promise<void> {
+  const res = await authedFetch(`/folders/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Could not delete the folder.')
+}
+
+export async function createNote(
+  folderId: number,
+  input: { title: string; purpose: string },
+): Promise<LocalNote> {
+  const res = await authedFetch(`/folders/${folderId}/notes/`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) throw new Error('Could not create the note.')
+  return mapNote(await res.json())
+}
+
+export async function updateNote(
+  id: number,
+  patch: { title?: string; purpose?: string },
+): Promise<LocalNote> {
+  const res = await authedFetch(`/notes/${id}`, { method: 'PUT', body: JSON.stringify(patch) })
+  if (!res.ok) throw new Error('Could not update the note.')
+  return mapNote(await res.json())
+}
+
+export async function deleteNote(id: number): Promise<void> {
+  const res = await authedFetch(`/notes/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Could not delete the note.')
+}

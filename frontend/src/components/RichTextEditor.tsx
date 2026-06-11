@@ -1,6 +1,7 @@
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import TextAlign from '@tiptap/extension-text-align'
+import { splitBlock } from '@tiptap/pm/commands'
 import { TextStyle } from '@tiptap/extension-text-style'
 import { Color } from '@tiptap/extension-color'
 import { Bold, Italic, AlignLeft, AlignCenter, AlignRight, Palette } from 'lucide-react'
@@ -41,6 +42,60 @@ function focusAdjacentEditor(currentEl: HTMLElement, direction: 1 | -1): boolean
   return true
 }
 
+// Whether there is another textblock (line/paragraph/list item) before/after the one
+// the cursor sits in. Because each visual line is its own <p> (see splitHardBreaks),
+// ProseMirror's endOfTextblock() is true on nearly every line — so on its own it would
+// make Arrow Up/Down jump to a different note block instead of moving one line. We only
+// hand off to the adjacent editor when the cursor is on the very first/last line of the
+// whole editor; otherwise ProseMirror moves the caret normally between lines.
+function hasTextblockBeyond(state: any, direction: 1 | -1): boolean {
+  const $head = state.selection.$head
+  let found = false
+  if (direction === -1) {
+    const start = $head.start($head.depth)
+    if (start <= 1) return false
+    state.doc.nodesBetween(0, start - 1, (node: any) => {
+      if (node.isTextblock) found = true
+    })
+  } else {
+    const end = $head.end($head.depth)
+    if (end >= state.doc.content.size - 1) return false
+    state.doc.nodesBetween(end + 1, state.doc.content.size, (node: any) => {
+      if (node.isTextblock) found = true
+    })
+  }
+  return found
+}
+
+/**
+ * Convert <br> hard breaks inside block elements into separate paragraphs, so each
+ * visual line is its own node. Without this, several lines share one <p> and
+ * block-level formatting like text-align applies to the whole paragraph (i.e. all
+ * lines) instead of just the selected line. Tailwind's preflight zeroes <p> margins,
+ * so the result looks identical to the old hard-break lines.
+ */
+function splitHardBreaks(html: string): string {
+  if (!html || !html.includes('<br')) return html
+  const tpl = document.createElement('template')
+  tpl.innerHTML = html
+  tpl.content.querySelectorAll('p, h3, h4, h5, h6').forEach((block) => {
+    if (!block.querySelector('br')) return
+    const frag = document.createDocumentFragment()
+    let line = block.cloneNode(false) as HTMLElement
+    Array.from(block.childNodes).forEach((node) => {
+      if (node.nodeName === 'BR') {
+        frag.appendChild(line)
+        line = block.cloneNode(false) as HTMLElement
+      } else {
+        line.appendChild(node)
+      }
+    })
+    frag.appendChild(line)
+    block.replaceWith(frag)
+  })
+  return tpl.innerHTML
+}
+
 export function RichTextEditor({ content, onChange, placeholder, className = '', onEnter, onArrowDown, onArrowUp }: RichTextEditorProps) {
   const [isFocused, setIsFocused] = useState(false)
   const [hasSelection, setHasSelection] = useState(false)
@@ -67,7 +122,7 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
       TextStyle,
       Color,
     ],
-    content,
+    content: splitHardBreaks(content),
     onUpdate: ({ editor }) => {
       onChange(editor.getHTML())
     },
@@ -84,6 +139,11 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
         placeholder: placeholder || '',
       },
       handleKeyDown: (view, event) => {
+        // Shift+Enter adds a new line as its own paragraph (not a <br>), so each
+        // line can be aligned/formatted independently.
+        if (event.key === 'Enter' && event.shiftKey) {
+          return splitBlock(view.state, view.dispatch)
+        }
         if (event.key === 'Enter' && !event.shiftKey && onEnter) {
           const { state } = view
           const { selection } = state
@@ -93,12 +153,12 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
             return true
           }
         }
-        if (event.key === 'ArrowDown' && !event.shiftKey && view.endOfTextblock('down')) {
+        if (event.key === 'ArrowDown' && !event.shiftKey && view.endOfTextblock('down') && !hasTextblockBeyond(view.state, 1)) {
           const handled = onArrowDown ? onArrowDown() : false
           if (handled === true) return true
           if (focusAdjacentEditor(view.dom as HTMLElement, 1)) return true
         }
-        if (event.key === 'ArrowUp' && !event.shiftKey && view.endOfTextblock('up')) {
+        if (event.key === 'ArrowUp' && !event.shiftKey && view.endOfTextblock('up') && !hasTextblockBeyond(view.state, -1)) {
           const handled = onArrowUp ? onArrowUp() : false
           if (handled === true) return true
           if (focusAdjacentEditor(view.dom as HTMLElement, -1)) return true
@@ -110,8 +170,10 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
 
   // Prevent internal state updates causing re-renders that reset cursor
   useEffect(() => {
-    if (editor && editor.getHTML() !== content && !editor.isFocused) {
-      editor.commands.setContent(content)
+    if (!editor) return
+    const normalized = splitHardBreaks(content)
+    if (editor.getHTML() !== normalized && !editor.isFocused) {
+      editor.commands.setContent(normalized)
     }
   }, [content, editor])
 
@@ -147,8 +209,8 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
       {/* Top Toolbar */}
       {editor && isFocused && (hasSelection || showColorPicker) ? (
         <div
-          style={{ top: toolbarPos.top, left: toolbarPos.left, transform: 'translateY(calc(-100% - 8px))' }}
-          className="absolute flex flex-wrap items-center gap-1 bg-slate-800 text-white p-1 rounded-lg shadow-xl z-50 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity w-max max-w-full"
+          style={{ top: toolbarPos.top, left: 0, transform: 'translateY(calc(-100% - 8px))' }}
+          className="absolute flex flex-wrap items-center gap-1 bg-slate-800 text-white p-1 rounded-lg shadow-xl z-50 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity max-w-full"
         >
           <button
             onMouseDown={(e) => { e.preventDefault(); editor.chain().focus().toggleBold().run() }}
@@ -275,8 +337,8 @@ export function RichTextEditor({ content, onChange, placeholder, className = '',
             </button>
             
             {showColorPicker && (
-              <div 
-                className="absolute top-full left-0 mt-2 flex gap-1.5 bg-slate-800 p-2 rounded-lg shadow-2xl z-30"
+              <div
+                className="absolute top-full right-0 mt-2 flex w-[140px] flex-wrap justify-center gap-1.5 bg-slate-800 p-2 rounded-lg shadow-2xl z-30"
                 onMouseDown={(e) => e.preventDefault()}
               >
                 {COLORS.map(color => (

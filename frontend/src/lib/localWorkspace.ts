@@ -1,10 +1,50 @@
-export type FolderColor = 'purple' | 'pink' | 'blue' | 'red' | 'green'
+// Folder/note/section *data* now lives in the backend (see lib/workspace.ts), scoped to
+// the authenticated user. What remains here is browser-local, per-user state: the note
+// editor's offline section buffer and the cross-note block clipboard, plus the shared
+// folder-color types. Nothing in this module is a source of truth for your notes, so it
+// can never silently lose them the way the old localStorage workspace could.
+import { currentUserScope } from './authToken'
+
+// "Bright & Delightful" palette from the Bloom Folders design.
+export type FolderColor =
+  | 'violet'
+  | 'coral'
+  | 'sky'
+  | 'olivine'
+  | 'honey'
+  | 'rose'
+  | 'indigo'
+  | 'fawn'
+  | 'maize'
+  | 'cerise'
+
+// Older saved folders (and the backend's first rows) used a 5-color palette. Map those
+// to the closest new hue so existing data keeps rendering after the redesign.
+const LEGACY_COLOR_MAP: Record<string, FolderColor> = {
+  purple: 'violet',
+  pink: 'cerise',
+  blue: 'sky',
+  red: 'coral',
+  green: 'olivine',
+}
+
+const VALID_COLORS: FolderColor[] = [
+  'violet', 'coral', 'sky', 'olivine', 'honey', 'rose', 'indigo', 'fawn', 'maize', 'cerise',
+]
+
+export function normalizeFolderColor(value: string | undefined): FolderColor {
+  if (value && (VALID_COLORS as string[]).includes(value)) return value as FolderColor
+  if (value && LEGACY_COLOR_MAP[value]) return LEGACY_COLOR_MAP[value]
+  return 'violet'
+}
 
 export interface LocalNote {
   id: number
   title: string
   purpose?: string
   created_at: string
+  // Optional per-note color. When absent, the UI falls back to the folder color.
+  color?: FolderColor
 }
 
 export interface LocalFolder {
@@ -17,59 +57,10 @@ export interface LocalFolder {
 
 export interface LocalSection {
   id: number
-  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code'
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image'
   content: string
+  title?: string | null
 }
-
-const foldersKey = 'note-tracker.local-folders'
-const sectionsKey = 'note-tracker.local-sections'
-
-const seedFolders: LocalFolder[] = [
-  {
-    id: 1,
-    name: 'Leetcode',
-    purpose: 'Patterns and practice notes',
-    color: 'blue',
-    notes: [{ id: 101, title: 'Two pointer patterns', purpose: 'Practice notes', created_at: new Date().toISOString() }],
-  },
-  {
-    id: 2,
-    name: 'daily digestion',
-    purpose: 'Collected thoughts and reading',
-    color: 'pink',
-    notes: [
-      { id: 201, title: 'Reading notes', purpose: 'Morning summary', created_at: new Date().toISOString() },
-      { id: 202, title: 'Ideas inbox', purpose: 'Loose thoughts', created_at: new Date().toISOString() },
-      { id: 203, title: 'Health log', purpose: 'Daily notes', created_at: new Date().toISOString() },
-      { id: 204, title: 'Evening review', purpose: 'Wrap-up', created_at: new Date().toISOString() },
-    ],
-  },
-  {
-    id: 3,
-    name: 'Fullstack',
-    purpose: 'Frontend and backend references',
-    color: 'purple',
-    notes: [
-      { id: 301, title: 'React patterns', purpose: 'UI references', created_at: new Date().toISOString() },
-      { id: 302, title: 'API checklist', purpose: 'Backend notes', created_at: new Date().toISOString() },
-      { id: 303, title: 'Deployment', purpose: 'Release notes', created_at: new Date().toISOString() },
-    ],
-  },
-  {
-    id: 4,
-    name: 'Projects',
-    purpose: 'Build plans and follow-ups',
-    color: 'purple',
-    notes: [{ id: 401, title: 'Roadmap', purpose: 'Next steps', created_at: new Date().toISOString() }],
-  },
-  {
-    id: 5,
-    name: 'algorithms',
-    purpose: 'Core concepts and examples',
-    color: 'blue',
-    notes: [{ id: 501, title: 'Graph basics', purpose: 'Reference', created_at: new Date().toISOString() }],
-  },
-]
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback
@@ -87,58 +78,41 @@ function writeJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value))
 }
 
-export function getLocalFolders(): LocalFolder[] {
-  const folders = readJson<LocalFolder[] | null>(foldersKey, null)
-  if (folders) return folders
-  writeJson(foldersKey, seedFolders)
-  return seedFolders
-}
-
-export function saveLocalFolders(folders: LocalFolder[]) {
-  writeJson(foldersKey, folders)
-}
-
-export function getLocalFolder(folderId: number): LocalFolder | null {
-  return getLocalFolders().find((folder) => folder.id === folderId) ?? null
-}
-
-export function getLocalNote(noteId: number): LocalNote | null {
-  for (const folder of getLocalFolders()) {
-    const note = folder.notes.find((item) => item.id === noteId)
-    if (note) return note
-  }
-  return null
-}
-
-export function createLocalNote(folderId: number, title: string, purpose: string): LocalNote | null {
-  const folders = getLocalFolders()
-  const nextNote: LocalNote = {
-    id: Date.now(),
-    title,
-    purpose,
-    created_at: new Date().toISOString(),
-  }
-  const updatedFolders = folders.map((folder) =>
-    folder.id === folderId ? { ...folder, notes: [nextNote, ...folder.notes] } : folder,
-  )
-  saveLocalFolders(updatedFolders)
-  writeJson(`${sectionsKey}.${nextNote.id}`, [])
-  return updatedFolders.some((folder) => folder.id === folderId) ? nextNote : null
-}
-
-export function deleteLocalNote(noteId: number) {
-  saveLocalFolders(
-    getLocalFolders().map((folder) => ({
-      ...folder,
-      notes: folder.notes.filter((note) => note.id !== noteId),
-    })),
-  )
+// --- NOTE EDITOR OFFLINE SECTION BUFFER ---
+// The editor mirrors section edits here so an in-progress note survives a reload even if
+// a save hasn't reached the backend yet. Keyed by user scope + note id so accounts can't
+// see each other's buffered content on a shared browser.
+function sectionsKeyFor(noteId: number) {
+  return `note-tracker.${currentUserScope()}.local-sections.${noteId}`
 }
 
 export function getLocalSections(noteId: number): LocalSection[] {
-  return readJson<LocalSection[]>(`${sectionsKey}.${noteId}`, [])
+  return readJson<LocalSection[]>(sectionsKeyFor(noteId), [])
 }
 
 export function saveLocalSections(noteId: number, sections: LocalSection[]) {
-  writeJson(`${sectionsKey}.${noteId}`, sections)
+  writeJson(sectionsKeyFor(noteId), sections)
+}
+
+// --- BLOCK CLIPBOARD ---
+// A copied block is kept in localStorage (not just React state) so it can be pasted into
+// any note, and survives navigation and page reloads. User-scoped so a copied block from
+// one account isn't pasteable by another on the same browser. The key is exported (as a
+// getter) so the editor can react to cross-tab `storage` events.
+export function clipboardKeyFor(): string {
+  return `note-tracker.${currentUserScope()}.clipboard`
+}
+
+export interface CopiedBlock {
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code'
+  content: string
+  title?: string | null
+}
+
+export function getCopiedBlock(): CopiedBlock | null {
+  return readJson<CopiedBlock | null>(clipboardKeyFor(), null)
+}
+
+export function saveCopiedBlock(block: CopiedBlock) {
+  writeJson(clipboardKeyFor(), block)
 }

@@ -1,278 +1,607 @@
-import { useEffect, useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { FileText, MoreHorizontal, Search, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { CreateNoteModal } from '../components/CreateNoteModal'
-import type { FormState as NoteFormState } from '../components/CreateNoteModal'
-import { ConfirmationModal } from '../components/ConfirmationModal'
-import { Header } from '../components/Header'
-import { createLocalNote, deleteLocalNote, getLocalFolder } from '../lib/localWorkspace'
+import type { FormState as NoteFormState, NoteInitial } from '../components/CreateNoteModal'
+import { DeleteNoteModal } from '../components/DeleteNoteModal'
+import { fetchFolder, createNote, updateNote, deleteNote } from '../lib/workspace'
+import { getAuthToken } from '../lib/authToken'
+import type { FolderColor, LocalFolder, LocalNote } from '../lib/localWorkspace'
+import { getSwatch } from '../lib/folderColors'
 
-interface NoteItem {
-  id: number
-  title: string
-  purpose?: string
-  created_at?: string
+const bricolage = "'Bricolage Grotesque', sans-serif"
+const geist = "'Geist', ui-sans-serif, sans-serif"
+const mono = "'Geist Mono', monospace"
+
+/* ---------- inline icons (match the design) ---------- */
+const ArrowLeft = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="19" y1="12" x2="5" y2="12" />
+    <polyline points="12 19 5 12 12 5" />
+  </svg>
+)
+const PlusIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+)
+const SearchIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </svg>
+)
+const MoreIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="5" cy="12" r="1.4" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+    <circle cx="19" cy="12" r="1.4" fill="currentColor" />
+  </svg>
+)
+const SortIcon = ({ size = 13 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 6h13" />
+    <path d="M3 12h9" />
+    <path d="M3 18h5" />
+    <path d="M17 9l3-3 3 3" />
+    <path d="M20 6v14" />
+  </svg>
+)
+const EditIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+)
+const TrashIcon = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+  </svg>
+)
+
+/* ---------- helpers ---------- */
+function formatDate(iso?: string) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
 }
 
-interface FolderData {
-  id: number
-  name: string
-  purpose?: string
-  notes: NoteItem[]
+const PAPERS = ['lined', 'grid', 'dot'] as const
+const PREVIEW_SETS = [
+  [82, 95, 70, 88, 60],
+  [90, 72, 88, 64],
+  [60, 86, 92, 70, 76],
+  [88, 64, 78],
+  [70, 90, 60, 85, 72, 80],
+  [85, 78, 92, 64],
+]
+
+// deterministic paper texture + preview lines from a note id (no model fields needed)
+function noteVisuals(id: number) {
+  const n = Math.abs(id)
+  return { paper: PAPERS[n % PAPERS.length], preview: PREVIEW_SETS[n % PREVIEW_SETS.length] }
 }
+
+const PAPER_BG: Record<(typeof PAPERS)[number], { backgroundImage: string; backgroundSize?: string; opacity: number }> = {
+  lined: {
+    backgroundImage:
+      'repeating-linear-gradient(to bottom, transparent 0px, transparent 21px, rgba(27,19,38,0.04) 21px, rgba(27,19,38,0.04) 22px)',
+    opacity: 0.5,
+  },
+  grid: {
+    backgroundImage:
+      'linear-gradient(rgba(27,19,38,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(27,19,38,0.035) 1px, transparent 1px)',
+    backgroundSize: '18px 18px',
+    opacity: 0.5,
+  },
+  dot: {
+    backgroundImage: 'radial-gradient(circle, rgba(27,19,38,0.10) 1px, transparent 1.5px)',
+    backgroundSize: '18px 18px',
+    opacity: 0.35,
+  },
+}
+
+type SortMode = 'recent' | 'name'
+const FILTERS = ['All', 'Recent', 'Starred', 'Drafts']
 
 export function FolderDetailPage() {
   const { folderId } = useParams()
+  const navigate = useNavigate()
+  const [folder, setFolder] = useState<LocalFolder | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [q, setQ] = useState('')
+  const [sortBy, setSortBy] = useState<SortMode>('recent')
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [folder, setFolder] = useState<FolderData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [editingNote, setEditingNote] = useState<LocalNote | null>(null)
+  const [deletingNote, setDeletingNote] = useState<LocalNote | null>(null)
+  const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
 
   const fetchFolderData = useCallback(async () => {
     if (!folderId) return
-    setFolder(getLocalFolder(parseInt(folderId)))
-    setIsLoading(false)
+    try {
+      const data = await fetchFolder(parseInt(folderId))
+      setFolder(data)
+    } catch {
+      setFolder(null)
+    } finally {
+      setLoaded(true)
+    }
   }, [folderId])
 
+  // Gate behind a session, then load this folder (with its notes) from the backend.
   useEffect(() => {
+    if (!getAuthToken()) {
+      navigate('/login', { replace: true })
+      return
+    }
     fetchFolderData()
-  }, [fetchFolderData])
+  }, [fetchFolderData, navigate])
 
-  const filteredNotes = (folder?.notes || []).filter(
-    (n) =>
-      n.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (n.purpose ?? '').toLowerCase().includes(searchQuery.toLowerCase()),
-  )
+  const accent = getSwatch(folder?.color ?? 'violet')
+  const notes = useMemo(() => folder?.notes ?? [], [folder])
 
-  const handleModalSuccess = () => {
-    fetchFolderData()
+  const filtered = useMemo(() => {
+    let xs = notes
+    const k = q.trim().toLowerCase()
+    if (k) {
+      xs = xs.filter(
+        (n) => n.title.toLowerCase().includes(k) || (n.purpose ?? '').toLowerCase().includes(k),
+      )
+    }
+    if (sortBy === 'name') xs = [...xs].sort((a, b) => a.title.localeCompare(b.title))
+    return xs
+  }, [notes, q, sortBy])
+
+  const openCreate = () => {
+    setEditingNote(null)
+    setIsModalOpen(true)
   }
 
-  const handleCreateNote = (form: NoteFormState) => {
+  const handleSubmit = async (form: NoteFormState) => {
     if (!folderId) return
-    createLocalNote(parseInt(folderId), form.name, form.purpose)
-    fetchFolderData()
+    try {
+      if (editingNote) {
+        await updateNote(editingNote.id, { title: form.name, purpose: form.purpose })
+      } else {
+        await createNote(parseInt(folderId), { title: form.name, purpose: form.purpose })
+      }
+      setEditingNote(null)
+      await fetchFolderData()
+    } catch {
+      setEditingNote(null)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deletingNote) return
+    try {
+      await deleteNote(deletingNote.id)
+      await fetchFolderData()
+    } catch {
+      /* leave the note in place if the delete failed */
+    }
+  }
+
+  const isEmpty = notes.length === 0
+  const modalInitial: NoteInitial | null = editingNote
+    ? { title: editingNote.title, purpose: editingNote.purpose, color: editingNote.color }
+    : null
+
+  if (loaded && !folder) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3" style={{ background: '#FBF7F2', color: '#1B1326', fontFamily: geist }}>
+        <p className="text-lg font-semibold">Folder not found</p>
+        <Link to="/dashboard" className="rounded-full bg-[#1B1326] px-5 py-2.5 text-sm font-semibold text-[#FBF7F2]">
+          Back to folders
+        </Link>
+      </div>
+    )
   }
 
   return (
-    <div id="folder-detail-page" className="min-h-screen bg-[#f0f4f8]">
-      <Header
-        title={folder ? folder.name : 'Loading...'}
-        actionLabel="New Note"
-        showBackButton={true}
-        onActionClick={() => setIsModalOpen(true)}
-      />
+    <div className="min-h-screen overflow-x-hidden" style={{ background: '#FBF7F2', color: '#1B1326', fontFamily: geist }}>
+      <div
+        id="folder-detail-page"
+        className="mx-auto max-w-[1440px] px-5 pb-20 pt-4 sm:px-10 sm:pt-6"
+        style={{ ['--accent' as string]: accent.swatch, ['--accent-tint' as string]: accent.tint } as React.CSSProperties}
+      >
+        {/* breadcrumb / sub-topbar */}
+        <header className="relative z-[5] mb-[30px] flex items-center gap-[18px] py-2.5">
+          <Link
+            to="/dashboard"
+            aria-label="Back to folders"
+            className="bloom-backbtn grid h-[42px] w-[42px] place-items-center rounded-full border border-[#1B1326]/[0.08] bg-white text-[#1B1326] shadow-[0_8px_22px_-16px_rgba(27,19,38,0.2)]"
+          >
+            <ArrowLeft />
+          </Link>
+          <div className="flex items-center gap-2.5 text-sm font-medium">
+            <Link to="/dashboard" className="px-1 py-1.5 text-[#6E5F7B] no-underline transition-colors hover:text-[#1B1326]">
+              Folders
+            </Link>
+            <span className="text-[#6E5F7B] opacity-40">/</span>
+            <span className="inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 font-bold tracking-[-0.005em]" style={{ background: accent.tint, color: accent.swatch }}>
+              <span className="h-2 w-2 rounded-full" style={{ background: accent.swatch, boxShadow: '0 0 0 3px rgba(255,255,255,0.6)' }} />
+              {folder?.name ?? '…'}
+            </span>
+          </div>
+          <div className="ml-auto">
+            <button
+              type="button"
+              onClick={openCreate}
+              className="inline-flex items-center gap-2.5 rounded-full bg-[#1B1326] py-2.5 pl-1.5 pr-5 text-sm font-semibold text-[#FBF7F2] shadow-[0_14px_30px_-16px_rgba(27,19,38,0.5)] transition-transform hover:-translate-y-px"
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-[#F59E0B] text-[#1B1326]">
+                <PlusIcon size={13} />
+              </span>
+              New Note
+            </button>
+          </div>
+        </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        <div className="flex items-center justify-between mb-6">
+        {/* hero header */}
+        <section className="relative z-[3] mb-7 grid grid-cols-1 items-end gap-8 lg:grid-cols-[1fr_auto]">
           <div>
-            <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Notes</h2>
-            <p className="mt-0.5 text-sm text-slate-500">
-              {folder ? folder.notes.length : 0} note{folder?.notes.length !== 1 ? 's' : ''}
+            <h1 className="m-0 font-extrabold leading-[1.05] tracking-[-0.035em]" style={{ fontFamily: bricolage, fontSize: 'clamp(40px, 6vw, 78px)' }}>
+              Notes{' '}
+              <span
+                className="inline-block bg-clip-text text-transparent"
+                style={{ backgroundImage: `linear-gradient(120deg, ${accent.swatch}, #EC4899)` }}
+              >
+                .
+              </span>
+            </h1>
+            <p className="mt-4 text-sm tracking-[-0.005em] text-[#6E5F7B]" style={{ fontFamily: mono }}>
+              <b className="font-semibold text-[#1B1326]">{notes.length}</b> {notes.length === 1 ? 'note' : 'notes'}
+              <span className="mx-3 inline-block h-1 w-1 -translate-y-px rounded-full bg-[#6E5F7B] align-middle opacity-50" />
+              in <b className="font-semibold text-[#1B1326]">{folder?.name ?? '…'}</b>
+              {notes.length > 0 && (
+                <>
+                  <span className="mx-3 inline-block h-1 w-1 -translate-y-px rounded-full bg-[#6E5F7B] align-middle opacity-50" />
+                  last edit <b className="font-semibold text-[#1B1326]">{formatDate(notes[0].created_at)}</b>
+                </>
+              )}
             </p>
           </div>
 
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-            <input
-              id="note-search"
-              type="text"
-              placeholder="Search notes…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-2 text-sm text-slate-700 placeholder-slate-400 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all duration-150 w-56"
-            />
+          <div className="flex items-end">
+            <div className="bloom-searchbox flex min-w-0 items-center gap-2.5 rounded-[14px] border-[1.5px] border-[#1B1326]/[0.08] bg-white px-3.5 py-3 shadow-[0_10px_28px_-16px_rgba(27,19,38,0.18)] lg:min-w-[340px]">
+              <span className="grid place-items-center text-[#6E5F7B]"><SearchIcon /></span>
+              <input
+                id="note-search"
+                type="text"
+                placeholder="Search notes…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[#6E5F7B]"
+              />
+              <span className="rounded-md border border-[#1B1326]/[0.08] bg-[#FBF7F2] px-[7px] py-[3px] text-[11px] text-[#6E5F7B]" style={{ fontFamily: mono }}>
+                ⌘ K
+              </span>
+            </div>
           </div>
-        </div>
+        </section>
 
-        {isLoading ? (
-          <LoadingGrid />
-        ) : !folder ? (
-          <div className="text-center py-20 text-slate-500">Folder not found</div>
-        ) : filteredNotes.length === 0 ? (
-          <EmptyState
-            hasSearch={searchQuery.length > 0}
-            onCreateNote={() => setIsModalOpen(true)}
-          />
-        ) : (
-          <div
-            id="notes-grid"
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-          >
-            {filteredNotes.map((note) => (
-              <NoteCard key={note.id} note={note} onDeleteSuccess={fetchFolderData} />
-            ))}
+        {/* filter row */}
+        {!isEmpty && (
+          <div className="relative z-[3] mb-7 flex flex-col items-stretch justify-between gap-3 border-b border-dashed border-[#1B1326]/[0.08] pb-[18px] sm:flex-row sm:items-center sm:gap-[18px]">
+            <div className="flex flex-wrap gap-1.5">
+              {FILTERS.map((label) => {
+                const on = label === 'All'
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[13px] font-medium transition-colors ${
+                      on
+                        ? 'border-[#1B1326]/[0.08] bg-white text-[#1B1326] shadow-[0_6px_18px_-12px_rgba(27,19,38,0.18)]'
+                        : 'border-transparent text-[#6E5F7B] hover:bg-[#7758A3]/[0.06] hover:text-[#1B1326]'
+                    }`}
+                  >
+                    {label}
+                    {on && (
+                      <span className="rounded-full px-1.5 py-0.5 text-[11px]" style={{ background: accent.tint, color: accent.swatch, fontFamily: mono }}>
+                        {notes.length}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSortBy((s) => (s === 'recent' ? 'name' : 'recent'))}
+              title="Toggle sort"
+              className="inline-flex items-center gap-1.5 self-end rounded-full border border-[#1B1326]/[0.08] bg-white px-3.5 py-2 text-[13px] text-[#6E5F7B] shadow-[0_6px_18px_-12px_rgba(27,19,38,0.18)] transition-colors hover:text-[#1B1326] sm:self-auto"
+            >
+              <SortIcon size={13} /> Sort: <b className="font-semibold text-[#1B1326]">{sortBy === 'recent' ? 'Recent' : 'Name'}</b>
+            </button>
           </div>
         )}
-      </main>
 
-      {folderId && (
+        {/* content */}
+        {isEmpty ? (
+          <EmptyNotes accent={accent} onCreate={openCreate} />
+        ) : (
+          <main className="relative z-[2] grid grid-cols-1 gap-[22px] sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+            {filtered.map((note, i) => (
+              <NoteCard
+                key={note.id}
+                note={note}
+                folderColor={folder!.color}
+                tilt={(i % 5) - 2}
+                menuOpen={menuOpenId === note.id}
+                onMenuToggle={() => setMenuOpenId((id) => (id === note.id ? null : note.id))}
+                onMenuClose={() => setMenuOpenId(null)}
+                onOpen={() => navigate(`/notes/${note.id}`)}
+                onEdit={() => { setEditingNote(note); setIsModalOpen(true); setMenuOpenId(null) }}
+                onDelete={() => { setDeletingNote(note); setMenuOpenId(null) }}
+              />
+            ))}
+            <button
+              type="button"
+              onClick={openCreate}
+              className="bloom-new-note-tile flex h-[280px] flex-col items-center justify-center gap-1.5 rounded-[18px] border-[1.5px] border-dashed border-[#7758A3]/25 p-4 text-center"
+            >
+              <span className="mb-1 grid h-11 w-11 place-items-center rounded-full bg-[#1B1326] text-[#FBF7F2] shadow-[0_10px_22px_-10px_rgba(27,19,38,0.5)]">
+                <PlusIcon size={20} />
+              </span>
+              <span className="text-[18px] font-extrabold tracking-[-0.02em] text-[#1B1326]" style={{ fontFamily: bricolage }}>
+                New note
+              </span>
+              <span className="text-xs text-[#6E5F7B]">Jot something down</span>
+            </button>
+          </main>
+        )}
+
+        {!isEmpty && filtered.length === 0 && q.trim() && (
+          <div className="py-10 text-center text-[#6E5F7B]">
+            <p>
+              No notes match "<b className="text-[#1B1326]">{q}</b>". Try a different search.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {folder && (
         <CreateNoteModal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          onSuccess={handleModalSuccess}
-          onCreate={handleCreateNote}
-          folderId={folderId}
+          onClose={() => { setIsModalOpen(false); setEditingNote(null) }}
+          onSubmit={handleSubmit}
+          folderName={folder.name}
+          folderColor={folder.color}
+          initialNote={modalInitial}
+        />
+      )}
+
+      {deletingNote && (
+        <DeleteNoteModal
+          title={deletingNote.title}
+          purpose={deletingNote.purpose}
+          color={deletingNote.color ?? folder?.color ?? 'violet'}
+          onClose={() => setDeletingNote(null)}
+          onConfirm={handleConfirmDelete}
         />
       )}
     </div>
   )
 }
 
-function NoteCard({ note, onDeleteSuccess }: { note: NoteItem, onDeleteSuccess: () => void }) {
-  const navigate = useNavigate()
-  const [showMenu, setShowMenu] = useState(false)
-  const [showConfirm, setShowConfirm] = useState(false)
+/* ---------- note card (paper) ---------- */
+function NoteCard({
+  note,
+  folderColor,
+  tilt,
+  menuOpen,
+  onMenuToggle,
+  onMenuClose,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  note: LocalNote
+  folderColor: FolderColor
+  tilt: number
+  menuOpen: boolean
+  onMenuToggle: () => void
+  onMenuClose: () => void
+  onOpen: () => void
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const sw = getSwatch(note.color ?? folderColor)
+  const { paper, preview } = noteVisuals(note.id)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!showMenu) return
-    const closeMenu = () => setShowMenu(false)
-    window.addEventListener('click', closeMenu)
-    return () => window.removeEventListener('click', closeMenu)
-  }, [showMenu])
-
-  const handleDelete = async () => {
-    deleteLocalNote(note.id)
-    onDeleteSuccess()
-  }
+    if (!menuOpen) return
+    const onDocClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onMenuClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMenuClose()
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen, onMenuClose])
 
   return (
     <article
-      onClick={() => navigate(`/notes/${note.id}`)}
-      className="group relative w-full aspect-[4/5] sm:aspect-[3/4] block cursor-pointer hover:-translate-y-1.5 transition-all duration-300 isolate bg-white rounded-2xl shadow-sm hover:shadow-xl hover:shadow-slate-200/50 border border-slate-200 overflow-hidden"
+      onClick={onOpen}
+      className="note-paper-card group relative flex h-[280px] cursor-pointer flex-col overflow-hidden rounded-[18px] border border-[#1B1326]/[0.08] bg-white shadow-[0_1px_0_rgba(27,19,38,0.04),0_2px_6px_rgba(27,19,38,0.04),0_10px_24px_-12px_rgba(27,19,38,0.10)]"
+      style={{ ['--tilt' as string]: `${tilt * 0.4}deg`, ['--accent' as string]: sw.swatch, ['--accent-tint' as string]: sw.tint } as React.CSSProperties}
     >
-      {/* 1. Subtle Paper Background & Watermark */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50/50 z-0" />
-      <div className="absolute top-2 right-2 sm:top-4 sm:right-4 text-slate-200 opacity-40 transform rotate-12 scale-150 group-hover:scale-[1.65] group-hover:rotate-6 transition-transform duration-500 pointer-events-none origin-top-right">
-        <FileText className="w-24 h-24 sm:w-32 sm:h-32" strokeWidth={0.75} />
-      </div>
-
-      {/* 2. Mock Document Content (Skeleton Lines) */}
-      <div className="absolute inset-x-6 top-8 flex flex-col gap-3.5 z-10 pointer-events-none opacity-40 group-hover:opacity-60 transition-opacity duration-300">
-        <div className="h-2 w-1/3 bg-slate-200 rounded-full" />
-        <div className="h-2 w-full bg-slate-200 rounded-full mt-2" />
-        <div className="h-2 w-5/6 bg-slate-200 rounded-full" />
-        <div className="h-2 w-full bg-slate-200 rounded-full" />
-        <div className="h-2 w-2/3 bg-slate-200 rounded-full" />
-        <div className="h-2 w-full bg-slate-200 rounded-full mt-2" />
-        <div className="h-2 w-4/5 bg-slate-200 rounded-full" />
-      </div>
-
-      {/* 3. Glassy Bottom Info Pane */}
-      <div className="absolute bottom-0 left-0 w-full h-[60%] z-20 flex flex-col justify-end">
-        {/* Soft gradient fade masking the top of the glass pane */}
-        <div className="absolute inset-0 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none" />
-        
-        {/* Glass backdrop with border */}
-        <div className="absolute bottom-0 inset-x-0 h-[75%] bg-white/70 backdrop-blur-xl border-t border-slate-100 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]" />
-
-        <div className="relative z-30 p-5 sm:p-6 w-full flex flex-col justify-end">
-          <h3 className="font-bold text-slate-800 text-lg sm:text-xl tracking-tight leading-snug truncate">
-            {note.title}
-          </h3>
-          
-          {note.purpose ? (
-            <p className="font-medium text-slate-500 text-xs sm:text-sm mt-0.5 truncate drop-shadow-sm">
-              {note.purpose}
-            </p>
-          ) : (
-            <p className="font-medium text-slate-400 text-xs sm:text-sm mt-0.5 italic truncate">
-              No purpose specified
-            </p>
-          )}
-
-          <div className="mt-4 sm:mt-5 flex items-center justify-between">
-            <span className="text-[10px] sm:text-[11px] font-semibold text-slate-400 uppercase tracking-widest">
-              {note.created_at ? new Date(note.created_at).toLocaleDateString() : 'Draft'}
-            </span>
-          </div>
-
-          <div className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4">
-            <div className="relative">
-              <button
-                aria-label="More options"
-                aria-expanded={showMenu}
-                className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100/80 opacity-0 group-hover:opacity-100 transition-all duration-150 relative"
-                onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu) }}
-              >
-                <MoreHorizontal className="w-5 h-5" />
-              </button>
-
-              {showMenu && (
-                <div 
-                  className="absolute bottom-full right-0 mb-1 w-32 bg-white rounded-xl shadow-xl ring-1 ring-slate-100 py-1.5 z-50 animate-modal-in origin-bottom-right"
-                  onClick={(e) => { e.stopPropagation() }}
-                >
-                  <button 
-                    onClick={() => { setShowMenu(false); setShowConfirm(true) }}
-                    className="w-full px-4 py-2 text-sm text-left text-red-600 hover:bg-red-50 flex items-center gap-2.5 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" /> Delete
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <ConfirmationModal 
-        isOpen={showConfirm} 
-        onClose={() => setShowConfirm(false)} 
-        onConfirm={handleDelete}
-        title="Delete Note"
-        message={`Are you sure you want to delete "${note.title}"? This action cannot be undone.`}
+      {/* paper texture */}
+      <div className="pointer-events-none absolute inset-0" style={PAPER_BG[paper]} />
+      {/* color spine */}
+      <div className="absolute bottom-0 left-0 top-0 w-[5px] opacity-85" style={{ background: sw.swatch }} />
+      {/* folded corner */}
+      <div
+        className="absolute right-0 top-0 h-7 w-7"
+        style={{
+          background: 'linear-gradient(225deg, rgba(27,19,38,0.06) 0%, rgba(27,19,38,0.06) 50%, transparent 50%)',
+          boxShadow: 'inset -2px 2px 4px rgba(27,19,38,0.06)',
+        }}
       />
+
+      {/* preview lines */}
+      <div className="relative z-[1] flex flex-1 flex-col gap-2.5 px-[22px] pb-3.5 pt-[22px]">
+        {preview.map((w, i) => (
+          <div
+            key={i}
+            className="rounded-full"
+            style={{ width: `${w}%`, height: i === 0 ? 9 : 7, background: i === 0 ? 'rgba(27,19,38,0.14)' : 'rgba(27,19,38,0.08)' }}
+          />
+        ))}
+      </div>
+
+      {/* body */}
+      <div className="relative z-[1] border-t border-[#1B1326]/[0.06] px-[22px] pb-[18px] pt-3.5" style={{ background: 'linear-gradient(to top, #ffffff 70%, rgba(255,255,255,0.6))' }}>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[11px] uppercase tracking-[0.05em] text-[#6E5F7B]" style={{ fontFamily: mono }}>
+            {formatDate(note.created_at) || 'Draft'}
+          </span>
+        </div>
+        <h3 className="m-0 mb-1 truncate text-[20px] font-extrabold leading-[1.15] tracking-[-0.025em]" style={{ fontFamily: bricolage }}>
+          {note.title}
+        </h3>
+        <p className="m-0 truncate pr-9 text-[13px] font-medium text-[#6E5F7B]">{note.purpose || '—'}</p>
+      </div>
+
+      {/* more menu */}
+      <div className="absolute bottom-3.5 right-3.5 z-[5]" ref={menuRef}>
+        <button
+          type="button"
+          aria-label={`${note.title} options`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onMenuToggle() }}
+          className={`note-more-btn grid h-[30px] w-[30px] place-items-center rounded-lg transition-all ${
+            menuOpen ? 'bg-[#1B1326]/[0.06] text-[#1B1326] opacity-100' : 'text-[#6E5F7B] opacity-65 hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326] hover:opacity-100'
+          }`}
+        >
+          <MoreIcon size={16} />
+        </button>
+        {menuOpen && (
+          <div
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+            className="absolute bottom-[calc(100%+6px)] right-0 z-50 flex min-w-[152px] flex-col gap-0.5 rounded-xl border border-[#1B1326]/[0.08] bg-white p-1.5 shadow-[0_10px_24px_-8px_rgba(27,19,38,0.18),0_24px_60px_-20px_rgba(27,19,38,0.30)] animate-modal-in"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onEdit() }}
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-semibold text-[#1B1326] transition-colors hover:bg-[#7758A3]/[0.08]"
+            >
+              <span className="grid h-[22px] w-[22px] place-items-center rounded-md" style={{ background: sw.tint, color: sw.swatch }}>
+                <EditIcon size={14} />
+              </span>
+              Edit
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete() }}
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-semibold text-[#B91C1C] transition-colors hover:bg-[#DC2626]/[0.08]"
+            >
+              <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-[#DC2626]/10 text-[#DC2626]">
+                <TrashIcon size={14} />
+              </span>
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
     </article>
   )
 }
 
-function LoadingGrid() {
+/* ---------- empty state ---------- */
+function EmptyNotes({ accent, onCreate }: { accent: ReturnType<typeof getSwatch>; onCreate: () => void }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" aria-busy="true">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 animate-pulse">
-          <div className="h-20 rounded-xl bg-slate-100 mb-4" />
-          <div className="h-4 rounded-lg bg-slate-100 mb-2 w-3/4" />
-          <div className="h-3 rounded-lg bg-slate-50 w-1/2" />
+    <section className="relative z-[2] pb-16 pt-8">
+      <div className="relative mx-auto grid max-w-[1100px] grid-cols-1 items-center gap-10 px-5 py-10 md:grid-cols-2 md:gap-[60px] md:px-10">
+        {/* halo */}
+        <div
+          className="pointer-events-none absolute left-[5%] top-1/2 h-[480px] w-[480px] -translate-y-1/2 rounded-full opacity-90"
+          style={{ background: accent.tint, filter: 'blur(80px)' }}
+        />
+
+        {/* layered paper stack */}
+        <div className="relative z-[1] mx-auto h-[360px] w-full max-w-[360px]">
+          <PaperSheet className="left-0 top-[30px] opacity-85" style={{ transform: 'rotate(-8deg)', background: 'linear-gradient(to bottom, #ffffff, #FAF6F0)', borderColor: accent.tint }}>
+            <PsLine w="40%" /><PsLine w="70%" /><PsLine w="55%" />
+          </PaperSheet>
+          <PaperSheet className="left-[50px] top-[18px]" style={{ transform: 'rotate(-2deg)', borderColor: accent.tint }}>
+            <PsLine w="40%" /><PsLine w="70%" /><PsLine w="55%" />
+          </PaperSheet>
+          <PaperSheet
+            className="left-[100px] top-2"
+            style={{
+              transform: 'rotate(5deg)',
+              backgroundColor: '#ffffff',
+              backgroundImage:
+                'repeating-linear-gradient(to bottom, transparent 0px, transparent 21px, rgba(27,19,38,0.05) 21px, rgba(27,19,38,0.05) 22px)',
+            }}
+          >
+            <div className="absolute right-0 top-0 h-8 w-8 rounded-tr-[14px]" style={{ background: 'linear-gradient(225deg, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.06) 50%, transparent 50%)' }} />
+            <div className="mb-1 text-[28px] font-bold tracking-[-0.005em] text-[#1B1326]" style={{ fontFamily: "'Caveat', cursive" }}>
+              Untitled
+            </div>
+            <PsLine w="78%" strong /><PsLine w="92%" /><PsLine w="62%" /><PsLine w="88%" /><PsLine w="40%" />
+          </PaperSheet>
+
+          <span className="note-sparkle absolute right-2.5 top-[-10px] text-[28px] font-bold" style={{ color: accent.swatch }}>✦</span>
+          <span className="note-sparkle absolute bottom-5 left-[-16px] text-[22px] font-bold" style={{ color: '#F59E0B', animationDelay: '1s' }}>✦</span>
+          <span className="note-sparkle absolute right-[-10px] top-1/2 text-[26px] font-bold" style={{ color: '#EC4899', animationDelay: '2s' }}>+</span>
         </div>
-      ))}
+
+        {/* text */}
+        <div className="relative z-[1]">
+          <h2 className="m-0 mb-3.5 font-extrabold leading-[1.05] tracking-[-0.03em]" style={{ fontFamily: bricolage, fontSize: 'clamp(36px, 4vw, 52px)' }}>
+            No notes yet
+          </h2>
+          <p className="mb-7 max-w-[420px] text-base leading-[1.55] text-[#6E5F7B]">
+            <span className="mr-1.5 align-[-2px] text-[22px] font-bold tracking-[-0.005em]" style={{ fontFamily: "'Caveat', cursive", color: accent.swatch }}>
+              Tip:
+            </span>
+            start with a quick thought, a meeting recap, or a wild idea — anything to fill the page.
+          </p>
+          <button
+            type="button"
+            onClick={onCreate}
+            className="inline-flex items-center gap-2.5 rounded-full px-6 py-3.5 text-[15px] font-bold text-white transition-transform hover:-translate-y-0.5"
+            style={{ background: `linear-gradient(135deg, ${accent.swatch}, #EC4899)`, boxShadow: `0 14px 30px -10px ${accent.tint}` }}
+          >
+            <PlusIcon size={14} />
+            Create your first note
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function PaperSheet({ className = '', style, children }: { className?: string; style?: React.CSSProperties; children?: React.ReactNode }) {
+  return (
+    <div
+      className={`absolute flex h-[300px] w-[240px] flex-col gap-2.5 rounded-[14px] border border-[#1B1326]/[0.06] bg-white px-[22px] pt-[22px] shadow-[0_18px_40px_-16px_rgba(27,19,38,0.18),0_4px_12px_-4px_rgba(27,19,38,0.06)] ${className}`}
+      style={style}
+    >
+      {children}
     </div>
   )
 }
 
-function EmptyState({
-  hasSearch,
-  onCreateNote,
-}: {
-  hasSearch: boolean
-  onCreateNote: () => void
-}) {
-  return (
-    <div
-      id="empty-state"
-      className="flex flex-col items-center justify-center py-24 text-center"
-    >
-      <span className="flex items-center justify-center w-16 h-16 rounded-2xl bg-emerald-50 mb-4">
-        <FileText className="w-8 h-8 text-emerald-400" strokeWidth={1.5} />
-      </span>
-      <h3 className="text-lg font-semibold text-slate-700 mb-1">
-        {hasSearch ? 'No matching notes' : 'No notes yet'}
-      </h3>
-      <p className="text-sm text-slate-500 mb-6 max-w-xs">
-        {hasSearch
-          ? 'Try a different search term.'
-          : 'Create your first note in this folder.'}
-      </p>
-      {!hasSearch && (
-        <button
-          id="empty-create-note-btn"
-          onClick={onCreateNote}
-          className="px-5 py-2.5 text-sm font-medium text-white bg-blue-500 rounded-xl hover:bg-blue-600 transition-colors duration-150 shadow-sm shadow-blue-200"
-        >
-          Create a Note
-        </button>
-      )}
-    </div>
-  )
+function PsLine({ w, strong }: { w: string; strong?: boolean }) {
+  return <div className="rounded-full" style={{ width: w, height: strong ? 8 : 6, background: strong ? 'rgba(27,19,38,0.13)' : 'rgba(27,19,38,0.07)' }} />
 }

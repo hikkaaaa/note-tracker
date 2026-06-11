@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, FolderPlus } from 'lucide-react'
+import { X, NotebookPen } from 'lucide-react'
 import type { FolderColor, LocalFolder } from '../lib/localWorkspace'
+import { COLOR_ORDER, FOLDER_SWATCHES } from '../lib/folderColors'
 
 interface CreateFolderModalProps {
   isOpen: boolean
@@ -16,27 +17,24 @@ export interface FormState {
   color: FolderColor
 }
 
-const colorOptions: Array<{ id: FolderColor; label: string; swatch: string; ring: string }> = [
-  { id: 'purple', label: 'Soft Purple', swatch: '#977DFF', ring: 'ring-[#977DFF]/35' },
-  { id: 'pink', label: 'Pastel Pink', swatch: '#FFCCF2', ring: 'ring-[#FFCCF2]' },
-  { id: 'blue', label: 'Original Blue', swatch: '#0033FF', ring: 'ring-[#0033FF]/25' },
-  { id: 'red', label: 'Red', swatch: '#ef4444', ring: 'ring-red-200' },
-  { id: 'green', label: 'Green', swatch: '#10b981', ring: 'ring-emerald-200' },
-]
+const NAME_CHAR_LIMIT = 40
+const DESC_CHAR_LIMIT = 120
+
+const bricolage = "'Bricolage Grotesque', sans-serif"
 
 export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initialFolder }: CreateFolderModalProps) {
-  const [form, setForm] = useState<FormState>({ name: '', purpose: '', color: 'purple' })
+  const [form, setForm] = useState<FormState>({ name: '', purpose: '', color: 'violet' })
   const [error, setError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   const isEditing = Boolean(initialFolder)
 
-  // Focus the name input when modal opens
+  // Reset + focus the name input when the modal opens
   useEffect(() => {
     if (isOpen) {
       setForm({
         name: initialFolder?.name ?? '',
         purpose: initialFolder?.purpose ?? '',
-        color: initialFolder?.color ?? 'purple',
+        color: initialFolder?.color ?? 'violet',
       })
       setError(null)
       setTimeout(() => nameInputRef.current?.focus(), 50)
@@ -52,13 +50,20 @@ export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initia
     return () => window.removeEventListener('keydown', handler)
   }, [isOpen, onClose])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const descChars = form.purpose.length
+  const overLimit = descChars > DESC_CHAR_LIMIT
+  const canSubmit = form.name.trim().length > 0 && !overLimit
+
+  const handleDescChange = (value: string) => {
+    setForm((f) => ({ ...f, purpose: value.slice(0, DESC_CHAR_LIMIT) }))
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.name.trim()) {
       setError('Folder name is required.')
       return
     }
-
     setError(null)
     if (onSubmit) {
       onSubmit({ name: form.name.trim(), purpose: form.purpose.trim(), color: form.color })
@@ -74,8 +79,8 @@ export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initia
     /* Backdrop */
     <div
       id="create-folder-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.35)', backdropFilter: 'blur(4px)' }}
+      className="fixed inset-0 z-[200] flex items-center justify-center p-6"
+      style={{ backgroundColor: 'rgba(27, 19, 38, 0.45)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       {/* Modal card */}
@@ -84,15 +89,19 @@ export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initia
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
-        className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200 animate-modal-in"
+        className="relative max-h-[calc(100vh-48px)] w-full max-w-[560px] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in"
+        style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif", color: '#1B1326' }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-blue-50">
-              <FolderPlus className="w-5 h-5 text-blue-500" />
+        <div className="flex items-center justify-between border-b border-[#1B1326]/[0.07] px-6 pb-5 pt-[22px]">
+          <div className="flex items-center gap-3.5">
+            <span
+              className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl"
+              style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.14), rgba(236,72,153,0.10))' }}
+            >
+              <NotebookPen className="h-[26px] w-[26px] text-[#8B5CF6]" strokeWidth={2.2} />
             </span>
-            <h2 id="modal-title" className="text-lg font-semibold text-slate-800">
+            <h2 id="modal-title" className="m-0 text-[22px] font-extrabold tracking-[-0.025em]" style={{ fontFamily: bricolage }}>
               {isEditing ? 'Edit Folder' : 'New Folder'}
             </h2>
           </div>
@@ -100,91 +109,102 @@ export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initia
             id="close-modal-btn"
             onClick={onClose}
             aria-label="Close modal"
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors duration-150"
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[#6E5F7B] transition-colors hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326]"
           >
-            <X className="w-4 h-4" />
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
 
         {/* Body */}
-        <form id="create-folder-form" onSubmit={handleSubmit} noValidate>
-          <div className="px-6 py-5 space-y-4">
-            {/* Name field */}
-            <div className="space-y-1.5">
-              <label htmlFor="folder-name" className="block text-sm font-medium text-slate-700">
-                Folder Name <span className="text-red-400">*</span>
-              </label>
-              <input
-                ref={nameInputRef}
-                id="folder-name"
-                type="text"
-                placeholder="e.g. Research Notes"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="w-full px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all duration-150 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              />
-            </div>
-
-            {/* Purpose field */}
-            <div className="space-y-1.5">
-              <label htmlFor="folder-purpose" className="block text-sm font-medium text-slate-700">
-                Folder Description
-                <span className="ml-1.5 text-xs font-normal text-slate-400">(optional)</span>
-              </label>
-              <textarea
-                id="folder-purpose"
-                rows={3}
-                placeholder="e.g. Collecting notes for Q2 market research"
-                value={form.purpose}
-                onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))}
-                className="w-full px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all duration-150 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 resize-none"
-              />
-            </div>
-
-            {/* Color field */}
-            <div className="space-y-1.5 pt-1">
-              <label className="block text-sm font-medium text-slate-700">Folder Color</label>
-              <div className="flex flex-wrap items-center gap-3">
-                {colorOptions.map((color) => (
-                  <button
-                    key={color.id}
-                    type="button"
-                    onClick={() => setForm((current) => ({ ...current, color: color.id }))}
-                    className={`h-8 w-8 rounded-full border border-white shadow-sm transition-all duration-200 ${
-                      form.color === color.id
-                        ? `ring-4 ring-offset-2 ${color.ring}`
-                        : 'opacity-85 hover:scale-110 hover:opacity-100'
-                    }`}
-                    style={{ backgroundColor: color.swatch }}
-                    aria-label={`Select ${color.label} color`}
-                    title={color.label}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Error */}
-            {error && (
-              <p className="text-sm text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                {error}
-              </p>
-            )}
+        <form id="create-folder-form" onSubmit={handleSubmit} noValidate className="flex flex-col gap-5 px-6 pb-6 pt-[22px]">
+          {/* Name field */}
+          <div className="flex flex-col gap-2">
+            <label htmlFor="folder-name" className="text-[15px] font-bold tracking-[-0.01em]">
+              Folder Name <span className="text-[#EC4899]">*</span>
+            </label>
+            <input
+              ref={nameInputRef}
+              id="folder-name"
+              type="text"
+              placeholder="e.g. Research Notes"
+              value={form.name}
+              maxLength={NAME_CHAR_LIMIT}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              className="w-full rounded-xl border-[1.5px] border-transparent bg-[#F4F5F8] px-3.5 py-3 text-[15px] outline-none transition-all placeholder:text-[#94A3B8] focus:border-[#8B5CF6] focus:bg-white focus:ring-4 focus:ring-[#8B5CF6]/15"
+            />
           </div>
 
+          {/* Description field */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="folder-purpose" className="text-[15px] font-bold tracking-[-0.01em]">
+                Folder Description <span className="ml-1 text-sm font-medium text-[#6E5F7B]">(optional)</span>
+              </label>
+              <span className={`font-mono text-[11px] ${overLimit ? 'font-semibold text-[#EC4899]' : 'text-[#6E5F7B]'}`}>
+                {descChars}/{DESC_CHAR_LIMIT}
+              </span>
+            </div>
+            <textarea
+              id="folder-purpose"
+              rows={3}
+              placeholder="e.g. Collecting notes for Q2 market research"
+              value={form.purpose}
+              onChange={(e) => handleDescChange(e.target.value)}
+              className="min-h-[96px] w-full resize-y rounded-xl border-[1.5px] border-transparent bg-[#F4F5F8] px-3.5 py-3 text-[15px] leading-relaxed outline-none transition-all placeholder:text-[#94A3B8] focus:border-[#8B5CF6] focus:bg-white focus:ring-4 focus:ring-[#8B5CF6]/15"
+            />
+          </div>
+
+          {/* Color field */}
+          <div className="flex flex-col gap-2">
+            <label className="text-[15px] font-bold tracking-[-0.01em]">Folder Color</label>
+            <div className="flex flex-wrap gap-3" role="radiogroup" aria-label="Folder color">
+              {COLOR_ORDER.map((id) => {
+                const sw = FOLDER_SWATCHES[id]
+                const selected = form.color === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={sw.label}
+                    title={sw.label}
+                    onClick={() => setForm((current) => ({ ...current, color: id }))}
+                    className={`h-[38px] w-[38px] rounded-full border-[3px] border-white p-0 transition-transform ${selected ? '' : 'hover:scale-110'}`}
+                    style={{
+                      backgroundColor: sw.swatch,
+                      outline: selected ? `2px solid ${sw.swatch}` : '2px solid transparent',
+                      outlineOffset: '2px',
+                      boxShadow: selected ? `0 4px 10px -2px ${sw.swatch}` : '0 1px 3px rgba(15,23,42,0.10)',
+                    }}
+                  />
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-500">
+              {error}
+            </p>
+          )}
+
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 px-6 pb-6 pt-2">
+          <div className="mt-1 flex items-center justify-end gap-2.5">
             <button
               type="button"
               id="cancel-btn"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors duration-150"
+              className="rounded-xl border-[1.5px] border-[#1B1326]/10 bg-white px-[22px] py-[11px] text-sm font-semibold text-[#1B1326] transition-colors hover:bg-[#F4F5F8]"
             >
               Cancel
             </button>
             <button
               type="submit"
               id="create-folder-submit-btn"
-              className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-[#0033FF] rounded-xl hover:bg-[#002be0] active:bg-[#0024bd] transition-colors duration-150 shadow-sm shadow-[#0033FF]/20"
+              disabled={!canSubmit}
+              className="rounded-xl bg-[#8B5CF6] px-[22px] py-[11px] text-sm font-bold text-white shadow-[0_8px_16px_-6px_rgba(139,92,246,0.45)] transition-transform hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:hover:translate-y-0"
             >
               {isEditing ? 'Save Changes' : 'Create Folder'}
             </button>

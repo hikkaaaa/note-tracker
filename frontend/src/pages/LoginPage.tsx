@@ -1,64 +1,170 @@
-import { motion } from 'framer-motion'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { MarketingHeader } from '../components/MarketingHeader'
+import { ArrowRight } from '../components/icons'
+import {
+  AuthLayout,
+  AuthSuccess,
+  authInputClass,
+  AuthDivider,
+  CheckSquare,
+  EyeIcon,
+  FormCard,
+  FormHead,
+  SocialRow,
+} from '../components/auth'
+import { saveAuth } from '../lib/authToken'
+import { API_BASE } from '../lib/api'
 
 export function LoginPage() {
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
+  const [nickname, setNickname] = useState('')
+  const [pwd, setPwd] = useState('')
+  const [showPwd, setShowPwd] = useState(false)
+  const [remember, setRemember] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [error, setError] = useState('')
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    navigate('/dashboard')
+    if (!nickname || !pwd || loading) return
+    setError('')
+    setLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname.trim(), password: pwd }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        const detail = data?.detail
+        setError(typeof detail === 'string' ? detail : 'Could not log you in. Please try again.')
+        setLoading(false)
+        return
+      }
+      const data = await res.json()
+      saveAuth(data.access_token, data.user)
+      setLoading(false)
+      setSubmitted(true)
+    } catch {
+      setError('Cannot reach the server. Is the backend running?')
+      setLoading(false)
+    }
   }
 
+  // After the success state shows, continue into the workspace.
+  useEffect(() => {
+    if (!submitted) return
+    const timer = setTimeout(() => navigate('/dashboard'), 1100)
+    return () => clearTimeout(timer)
+  }, [submitted, navigate])
+
   return (
-    <div className="min-h-screen overflow-hidden bg-[#fbfbfd] text-slate-950">
-      <MarketingHeader />
+    <AuthLayout cta={{ label: 'Back home', to: '/' }}>
+      <FormCard>
+        {!submitted ? (
+          <>
+            <FormHead title="Log in" subtitle="Enter your details to continue to your folders." />
+            <SocialRow />
+            <AuthDivider />
 
-      <motion.main
-        className="flex min-h-[calc(100vh-5rem)] items-center justify-center px-6 pb-20"
-        initial={{ x: 36, opacity: 0, filter: 'blur(8px)' }}
-        animate={{ x: 0, opacity: 1, filter: 'blur(0px)' }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      >
-        <section className="w-full max-w-sm">
-          <div className="mb-8 text-center">
-            <h1 className="text-4xl font-extrabold tracking-tight">Log in</h1>
-            <p className="mt-3 text-sm font-medium text-slate-500">
-              Enter your email to continue to your folders.
-            </p>
-          </div>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-[13px] font-semibold">Nickname</span>
+                <input
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="yourname"
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value)}
+                  required
+                  className={authInputClass}
+                />
+              </label>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <label className="block">
-              <span className="mb-2 block text-sm font-semibold text-slate-700">Email</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="you@example.com"
-                className="h-13 w-full rounded-2xl border border-slate-200 bg-white px-4 text-base font-medium text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-[#977DFF] focus:ring-4 focus:ring-[#977DFF]/15"
-              />
-            </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="flex items-baseline justify-between text-[13px] font-semibold">
+                  Password
+                  <button type="button" className="cursor-pointer bg-transparent text-[12px] font-medium text-[#7758A3] hover:underline">
+                    Forgot?
+                  </button>
+                </span>
+                <div className="relative">
+                  <input
+                    type={showPwd ? 'text' : 'password'}
+                    placeholder="••••••••"
+                    value={pwd}
+                    onChange={(e) => setPwd(e.target.value)}
+                    required
+                    className={`${authInputClass} pr-12`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwd((v) => !v)}
+                    aria-label="Toggle password visibility"
+                    className="absolute right-3 top-1/2 grid -translate-y-1/2 cursor-pointer place-items-center rounded-md bg-transparent p-1.5 text-[#6E5F7B] hover:text-[#7758A3]"
+                  >
+                    <EyeIcon open={showPwd} />
+                  </button>
+                </div>
+              </label>
 
-            <button
-              type="submit"
-              className="h-13 w-full rounded-2xl bg-[#0033FF] px-5 text-base font-bold text-white shadow-xl shadow-[#0033FF]/20 transition-transform hover:-translate-y-0.5"
-            >
-              Log In
-            </button>
-          </form>
+              <div className="mt-0.5 flex items-center justify-between">
+                <label className="flex cursor-pointer select-none items-center gap-2 text-[13px]">
+                  <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="sr-only" />
+                  <CheckSquare checked={remember} />
+                  <span>Remember me</span>
+                </label>
+              </div>
 
-          <Link
-            to="/login"
-            className="mt-6 block text-center text-sm font-semibold text-[#0033FF] hover:text-[#977DFF]"
-          >
-            Don&apos;t have an account?
-          </Link>
-        </section>
-      </motion.main>
-    </div>
+              {error && (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-[#DB3E8C]/25 bg-[#DB3E8C]/[0.07] px-3.5 py-2.5 text-[13px] font-medium text-[#B91C57]"
+                >
+                  {error}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-2 inline-flex min-h-[52px] items-center justify-center gap-2.5 rounded-xl bg-[#1B1326] px-[22px] py-4 text-[15px] font-semibold text-[#FBF7F2] shadow-[0_12px_28px_-14px_rgba(27,19,38,0.5)] transition-transform hover:-translate-y-px disabled:cursor-wait disabled:opacity-80"
+              >
+                {loading ? (
+                  <span className="h-[18px] w-[18px] animate-spin rounded-full border-[2.5px] border-white/25 border-t-white" />
+                ) : (
+                  <>
+                    Log in
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#F6C45C]">
+                      <ArrowRight size={13} color="#1B1326" />
+                    </span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-[22px] text-center text-sm text-[#6E5F7B]">
+              New here?{' '}
+              <Link to="/signup" className="font-semibold text-[#DB3E8C] no-underline hover:underline">
+                Create an account →
+              </Link>
+            </div>
+          </>
+        ) : (
+          <AuthSuccess title="You're in." subtitle="Loading your space…" />
+        )}
+      </FormCard>
+
+      <div className="text-center text-[12px] text-[#6E5F7B]">
+        By logging in you agree to our{' '}
+        <a className="cursor-pointer text-[#7758A3] hover:underline">Terms</a> and{' '}
+        <a className="cursor-pointer text-[#7758A3] hover:underline">Privacy Policy</a>.
+      </div>
+    </AuthLayout>
   )
 }

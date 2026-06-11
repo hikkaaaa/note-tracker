@@ -1,27 +1,101 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useBlocker } from 'react-router-dom'
-import { Plus, Type, CheckSquare, ListTodo, ChevronLeft, ChevronRight, Save, Loader2, Trash2, List as ListIcon, Table as TableIcon, LayoutDashboard, LayoutList, GripVertical, MoreVertical, Copy, ClipboardPaste, Download, Code2 } from 'lucide-react'
+import { Plus, Type, CheckSquare, ListTodo, ChevronLeft, ChevronRight, Save, Loader2, Trash2, List as ListIcon, Table as TableIcon, LayoutDashboard, LayoutList, GripVertical, MoreVertical, Copy, ClipboardPaste, Download, Code2, Heading, Image as ImageIcon, Timer as TimerIcon } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useReactToPrint } from 'react-to-print'
 import { DndContext, DragOverlay, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core'
 import type { DragStartEvent, DragEndEvent } from '@dnd-kit/core'
 import { motion, AnimatePresence } from 'framer-motion'
 import { RichTextEditor } from '../components/RichTextEditor'
+import { NoteTimer } from '../components/NoteTimer'
 import { FormatListBlock } from '../components/FormatListBlock'
 import { TableBlock } from '../components/TableBlock'
 import { CodeBlock } from '../components/CodeBlock'
-import { getLocalNote, getLocalSections, saveLocalSections } from '../lib/localWorkspace'
+import { ImageBlock } from '../components/ImageBlock'
+import { getLocalSections, saveLocalSections, getCopiedBlock, saveCopiedBlock, clipboardKeyFor, type CopiedBlock } from '../lib/localWorkspace'
+import type { LocalFolder } from '../lib/localWorkspace'
+import { getSwatch } from '../lib/folderColors'
+import { authedFetch } from '../lib/api'
+import { fetchFolder } from '../lib/workspace'
+import { getAuthToken } from '../lib/authToken'
 
 interface SectionData {
   id: number
-  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code'
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image'
   content: string
+  // Optional per-block title. null = no title (text/code, or removed); a string (incl. '')
+  // = a titled block. See TITLE_BLOCKS for which types show a title by default.
+  title?: string | null
 }
+
+// Block types that carry an editable title. Text and code blocks never do (code has
+// its own built-in title in a different style).
+const TITLE_BLOCKS = new Set(['checklist', 'tickbox', 'list', 'table', 'image'])
+const canHaveTitle = (type: string) => TITLE_BLOCKS.has(type)
+// A title-capable block shows its title unless it has been explicitly removed (null).
+const blockShowsTitle = (s: { type: string, title?: string | null }) => canHaveTitle(s.type) && s.title !== null
+// Titles are rich-text HTML; treat tag-only/whitespace markup (e.g. "<p></p>") as empty
+// so the "Untitled" placeholder shows.
+const isBlankHtml = (html?: string | null) => !html || html.replace(/<[^>]+>/g, '').replace(/&nbsp;|\s/g, '') === ''
 
 interface NoteData {
   id: number
   title: string
   purpose?: string
+}
+
+const bricolage = "'Bricolage Grotesque', sans-serif"
+const geist = "'Geist', ui-sans-serif, sans-serif"
+const mono = "'Geist Mono', monospace"
+
+// Smooth tween for section enter/exit/reorder. A plain duration+ease (not a spring) so
+// blocks settle without the overshoot/bounce that the default layout spring produces.
+const SECTION_TRANSITION = { duration: 0.22, ease: [0.22, 1, 0.36, 1] as const }
+
+// Drag-to-add palette (Bloom). Each block type gets an accent + soft tint tile.
+const BLOCK_DEFS = [
+  { type: 'text', title: 'Text Block', subtitle: 'Free-form prose', icon: Type, accent: '#3B82F6', tint: 'rgba(59,130,246,0.12)' },
+  { type: 'checklist', title: 'Checklist', subtitle: 'Checks move to bottom', icon: ListTodo, accent: '#10B981', tint: 'rgba(16,185,129,0.12)' },
+  { type: 'tickbox', title: 'Tickboxes', subtitle: 'Static order', icon: CheckSquare, accent: '#EC4899', tint: 'rgba(236,72,153,0.12)' },
+  { type: 'list', title: 'List', subtitle: 'Custom styles', icon: ListIcon, accent: '#F97316', tint: 'rgba(249,115,22,0.12)' },
+  { type: 'table', title: 'Table', subtitle: 'Resizable grid', icon: TableIcon, accent: '#14B8A6', tint: 'rgba(20,184,166,0.14)' },
+  { type: 'code', title: 'Code Block', subtitle: 'Syntax highlighted', icon: Code2, accent: '#5B21B6', tint: 'rgba(91,33,182,0.12)' },
+  { type: 'image', title: 'Image', subtitle: 'Drag, drop or browse', icon: ImageIcon, accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
+] as const
+
+// best-effort word count across all section types (strip HTML / JSON wrappers)
+function countWords(sections: SectionData[]) {
+  let n = 0
+  for (const s of sections) {
+    let text = ''
+    if (s.type === 'text' || s.type === 'table') text = s.content
+    else if (s.type === 'list') {
+      try { text = (JSON.parse(s.content).items ?? []).map((i: { text: string }) => i.text).join(' ') } catch { /* ignore */ }
+    } else if (s.type === 'checklist' || s.type === 'tickbox') {
+      try { text = (JSON.parse(s.content) as Array<{ text: string }>).map((i) => i.text).join(' ') } catch { /* ignore */ }
+    } else if (s.type === 'code') {
+      try { text = JSON.parse(s.content).code ?? '' } catch { /* ignore */ }
+    }
+    n += text.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length
+  }
+  return n
+}
+
+// Plain-text rendering of a block, for the system clipboard so it can be pasted into
+// other apps. Best-effort per block type; HTML is stripped to its text.
+function blockToPlainText(block: CopiedBlock): string {
+  const stripHtml = (html: string) =>
+    html.replace(/<\/(p|div|tr|h[1-6]|li)>/gi, '\n').replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim()
+  const titleText = block.title ? stripHtml(block.title) : ''
+  const titlePrefix = titleText ? `${titleText}\n` : ''
+  let body = ''
+  try {
+    if (block.type === 'text' || block.type === 'table') body = stripHtml(block.content)
+    else if (block.type === 'list') body = (JSON.parse(block.content).items ?? []).map((i: { text: string }) => `• ${i.text}`).join('\n')
+    else if (block.type === 'checklist' || block.type === 'tickbox') body = (JSON.parse(block.content) as Array<{ text: string, checked: boolean }>).map((i) => `${i.checked ? '[x]' : '[ ]'} ${i.text}`).join('\n')
+    else if (block.type === 'code') body = JSON.parse(block.content).code ?? ''
+  } catch { body = block.content }
+  return `${titlePrefix}${body}`.trim()
 }
 
 export function NoteEditorPage() {
@@ -34,13 +108,28 @@ export function NoteEditorPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [leftOpen, setLeftOpen] = useState(true)
+  const [rightOpen, setRightOpen] = useState(true)
+  const [showTimer, setShowTimer] = useState(false)
   const [layoutMode, setLayoutMode] = useState<'vertical' | 'horizontal'>('vertical')
   const [activeDragItem, setActiveDragItem] = useState<any>(null)
-  const [copiedBlock, setCopiedBlock] = useState<{type: string, content: string} | null>(null)
+  // Seed from the shared localStorage clipboard so a block copied in another note (or
+  // before a reload) can be pasted here.
+  const [copiedBlock, setCopiedBlock] = useState<CopiedBlock | null>(() => getCopiedBlock())
   const [deletedStack, setDeletedStack] = useState<Array<{ type: string, content: string, rowIndex: number, colIndex: number }>>([])
 
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // The note's folder (for breadcrumb + accent color) comes from the backend once the
+  // note loads — see fetchNoteAndSections, which resolves it via the note's folder_id.
+  const [folder, setFolder] = useState<LocalFolder | null>(null)
+  const accent = getSwatch(folder?.color ?? 'violet')
+  const wordCount = useMemo(() => countWords(sections), [sections])
+
+  // No session → back to login.
+  useEffect(() => {
+    if (!getAuthToken()) navigate('/login', { replace: true })
+  }, [navigate])
 
   const handleExportPDF = useReactToPrint({
     contentRef,
@@ -76,20 +165,36 @@ export function NoteEditorPage() {
     if (!noteId) return
     const parsedNoteId = parseInt(noteId)
     try {
-      const noteRes = await fetch(`http://localhost:8000/notes/${noteId}`)
+      const noteRes = await authedFetch(`/notes/${noteId}`)
       if (noteRes.ok) {
-        setNote(await noteRes.json())
+        const noteData = await noteRes.json()
+        setNote(noteData)
+        // Resolve the owning folder for the breadcrumb + accent color.
+        if (noteData.folder_id != null) {
+          fetchFolder(noteData.folder_id).then(setFolder).catch(() => setFolder(null))
+        }
       } else {
-        setNote(getLocalNote(parsedNoteId))
+        setNote(null)
       }
-      
-      const sectionsRes = await fetch(`http://localhost:8000/notes/${noteId}/sections/`)
+
+      const sectionsRes = await authedFetch(`/notes/${noteId}/sections/`)
       if (sectionsRes.ok) {
         const data = await sectionsRes.json()
-        const layoutSec = data.find((s: any) => s.type === 'layout');
+        const layoutSecs = data.filter((s: any) => s.type === 'layout');
         const regularSecs = data.filter((s: any) => s.type !== 'layout');
         setSections(regularSecs)
-        
+
+        // Use the most-recently-saved layout (highest id). A previous bug created a new
+        // layout row on every save, so a note can carry several; the older ones hold a
+        // stale order that omits later-added blocks. Best-effort delete the duplicates so
+        // the DB self-heals.
+        const layoutSec = layoutSecs.length
+          ? layoutSecs.reduce((a: any, b: any) => (b.id > a.id ? b : a))
+          : undefined;
+        layoutSecs
+          .filter((s: any) => s.id !== layoutSec?.id)
+          .forEach((s: any) => { authedFetch(`/sections/${s.id}`, { method: 'DELETE' }).catch(() => {}) });
+
         if (layoutSec) {
            setLayoutSectionId(layoutSec.id);
            try {
@@ -114,8 +219,9 @@ export function NoteEditorPage() {
         setLayoutRows(localSections.map((section) => [section.id]))
       }
     } catch {
+      // Network/backend hiccup (a 401 has already redirected to /login): fall back to any
+      // sections buffered locally for this note so in-progress work isn't lost.
       const localSections = getLocalSections(parsedNoteId)
-      setNote(getLocalNote(parsedNoteId))
       setSections(localSections)
       setLayoutSectionId(null)
       setLayoutRows(localSections.map((section) => [section.id]))
@@ -128,7 +234,16 @@ export function NoteEditorPage() {
     fetchNoteAndSections()
   }, [fetchNoteAndSections])
 
-  const addSectionAt = async (type: any, targetId: number | null, position: 'top'|'bottom'|'left'|'right', customContent?: string) => {
+  // Keep the paste option in sync when a block is copied in another tab/window.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === clipboardKeyFor()) setCopiedBlock(getCopiedBlock())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const addSectionAt = async (type: any, targetId: number | null, position: 'top'|'bottom'|'left'|'right', customContent?: string, customTitle?: string | null) => {
     if (!noteId) return
     let defaultContent = ''
     if (customContent !== undefined) {
@@ -137,6 +252,11 @@ export function NoteEditorPage() {
     else if (type === 'list') defaultContent = JSON.stringify({ style: '1.', items: [{ id: Date.now().toString(), text: '' }] })
     else if (type === 'table') defaultContent = `<table style="width:100%"><tbody><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr></tbody></table>`
     else if (type === 'code') defaultContent = JSON.stringify({ language: '', code: '' })
+    else if (type === 'image') defaultContent = JSON.stringify({ src: '' })
+
+    // A pasted block carries its own title; otherwise title-capable blocks start with an
+    // (empty) title shown by default, and other types have none.
+    const defaultTitle = customTitle !== undefined ? customTitle : (canHaveTitle(type) ? '' : null)
 
     const addSectionToLayout = (newSection: SectionData) => {
       setSections(prev => {
@@ -168,15 +288,15 @@ export function NoteEditorPage() {
     }
 
     try {
-      const res = await fetch(`http://localhost:8000/notes/${noteId}/sections/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, content: defaultContent }) })
+      const res = await authedFetch(`/notes/${noteId}/sections/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, content: defaultContent, title: defaultTitle }) })
       if (res.ok) {
         const newSection = await res.json()
         addSectionToLayout(newSection)
       } else {
-        addSectionToLayout({ id: Date.now(), type, content: defaultContent })
+        addSectionToLayout({ id: Date.now(), type, content: defaultContent, title: defaultTitle })
       }
     } catch {
-      addSectionToLayout({ id: Date.now(), type, content: defaultContent })
+      addSectionToLayout({ id: Date.now(), type, content: defaultContent, title: defaultTitle })
     }
   }
 
@@ -216,6 +336,16 @@ export function NoteEditorPage() {
     setIsDirty(true)
   }
 
+  // Update a block's title. Pass a string to set/show it, or null to remove it entirely.
+  const updateSectionTitleLocal = (id: number, title: string | null) => {
+    setSections(prev => {
+      const nextSections = prev.map(s => s.id === id ? { ...s, title } : s)
+      if (noteId) saveLocalSections(parseInt(noteId), nextSections)
+      return nextSections
+    })
+    setIsDirty(true)
+  }
+
   const deleteSection = async (id: number) => {
     const target = sections.find(s => s.id === id)
     let rowIndex = -1, colIndex = -1
@@ -224,7 +354,7 @@ export function NoteEditorPage() {
       if (c !== -1) { rowIndex = r; colIndex = c; break }
     }
     try {
-      await fetch(`http://localhost:8000/sections/${id}`, { method: 'DELETE' })
+      await authedFetch(`/sections/${id}`, { method: 'DELETE' })
       setSections(prev => {
         const nextSections = prev.filter(s => s.id !== id)
         if (noteId) saveLocalSections(parseInt(noteId), nextSections)
@@ -253,7 +383,7 @@ export function NoteEditorPage() {
     if (!noteId || deletedStack.length === 0) return
     const last = deletedStack[deletedStack.length - 1]
     try {
-      const res = await fetch(`http://localhost:8000/notes/${noteId}/sections/`, {
+      const res = await authedFetch(`/notes/${noteId}/sections/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: last.type, content: last.content })
@@ -299,23 +429,22 @@ export function NoteEditorPage() {
     if (noteId) saveLocalSections(parseInt(noteId), sections)
     try {
       await Promise.all(
-        sections.map(s => 
-          fetch(`http://localhost:8000/sections/${s.id}`, {
+        sections.map(s =>
+          authedFetch(`/sections/${s.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: s.content })
+            body: JSON.stringify({ content: s.content, title: s.title ?? null })
           })
         )
       )
-      
-      const missingLayoutInState = !sections.find(s => s.id === layoutSectionId);
-      if (layoutSectionId && !missingLayoutInState) {
-          await fetch(`http://localhost:8000/sections/${layoutSectionId}`, {
+
+      if (layoutSectionId) {
+          await authedFetch(`/sections/${layoutSectionId}`, {
              method: 'PUT', headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ content: JSON.stringify(layoutRows) })
           })
       } else {
-          const res = await fetch(`http://localhost:8000/notes/${noteId}/sections/`, {
+          const res = await authedFetch(`/notes/${noteId}/sections/`, {
              method: 'POST', headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ type: 'layout', content: JSON.stringify(layoutRows) })
           })
@@ -353,7 +482,7 @@ export function NoteEditorPage() {
     setActiveDragItem(null)
     const { over, active } = e
     if (!over) return;
-    
+
     const sourceData = active.data.current;
     if (!sourceData) return;
 
@@ -376,94 +505,201 @@ export function NoteEditorPage() {
 
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd} collisionDetection={pointerWithin}>
-    <div className="h-screen overflow-hidden bg-[#f0f4f8] flex flex-col">
-      <header className="sticky top-0 z-40 flex items-center justify-between px-6 py-4 bg-white/80 backdrop-blur-md border-b border-slate-100 shadow-sm">
-        <div className="flex items-center gap-4">
+    <div
+      className="min-h-screen overflow-x-clip"
+      style={{ background: '#FBF7F2', color: '#1B1326', fontFamily: geist, ['--accent' as string]: accent.swatch, ['--accent-tint' as string]: accent.tint } as React.CSSProperties}
+    >
+      {/* sub-topbar */}
+      <header className="sticky top-0 z-40 border-b border-[#1B1326]/[0.06] bg-[#FBF7F2]/85 backdrop-blur-md print:hidden">
+        <div className="mx-auto flex max-w-[1500px] items-center gap-4 px-5 py-3 sm:px-10">
           <button
             onClick={() => navigate(-1)}
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+            aria-label="Back"
+            className="bloom-backbtn grid h-[42px] w-[42px] flex-shrink-0 place-items-center rounded-full border border-[#1B1326]/[0.08] bg-white text-[#1B1326] shadow-[0_8px_22px_-16px_rgba(27,19,38,0.2)]"
           >
-            <ChevronLeft className="w-5 h-5" />
+            <ChevronLeft className="h-[18px] w-[18px]" />
           </button>
-          <div>
-            <h1 className="text-lg font-semibold text-slate-800 leading-tight">
-              {note ? note.title : 'Loading...'}
-            </h1>
-            {note?.purpose && (
-              <p className="text-xs text-slate-400 opacity-80">{note.purpose}</p>
+
+          <div className="flex min-w-0 items-center gap-2.5 text-sm font-medium">
+            <button onClick={() => navigate('/dashboard')} className="hidden px-1 py-1.5 text-[#6E5F7B] transition-colors hover:text-[#1B1326] sm:inline">Folders</button>
+            {folder && (
+              <>
+                <span className="hidden text-[#6E5F7B] opacity-40 sm:inline">/</span>
+                <button onClick={() => navigate(`/folders/${folder.id}`)} className="hidden items-center gap-1.5 px-1 py-1.5 font-semibold text-[#1B1326] sm:inline-flex">
+                  <span className="h-[7px] w-[7px] rounded-full" style={{ background: accent.swatch }} />
+                  {folder.name}
+                </button>
+              </>
             )}
+            <span className="hidden text-[#6E5F7B] opacity-40 sm:inline">/</span>
+            <span className="max-w-[200px] truncate font-extrabold tracking-[-0.01em]" style={{ fontFamily: bricolage }}>
+              {note ? note.title : 'Loading…'}
+            </span>
           </div>
-        </div>
-        
-        <div className="flex items-center gap-6 print:hidden">
-          <div className="flex bg-slate-100 p-1 rounded-xl">
-            <button
-              onClick={() => setLayoutMode('vertical')}
-              className={`p-2 rounded-lg transition-all ${layoutMode === 'vertical' ? 'bg-white shadow-sm text-blue-500' : 'text-slate-400 hover:text-slate-600'}`}
-              title="Vertical Layout"
-            >
-              <LayoutList className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setLayoutMode('horizontal')}
-              className={`p-2 rounded-lg transition-all ${layoutMode === 'horizontal' ? 'bg-white shadow-sm text-blue-500' : 'text-slate-400 hover:text-slate-600'}`}
-              title="Horizontal Layout"
-            >
-              <LayoutDashboard className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex items-center gap-3">
+
+          <div className="ml-auto flex items-center gap-2.5">
+            <div className="inline-flex rounded-xl border border-[#1B1326]/[0.08] bg-white p-1">
+              <button
+                onClick={() => setLayoutMode('vertical')}
+                title="Focus width"
+                className="grid h-8 w-8 place-items-center rounded-lg transition-colors"
+                style={layoutMode === 'vertical' ? { background: accent.tint, color: accent.swatch } : { color: '#6E5F7B' }}
+              >
+                <LayoutList className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setLayoutMode('horizontal')}
+                title="Wide width"
+                className="grid h-8 w-8 place-items-center rounded-lg transition-colors"
+                style={layoutMode === 'horizontal' ? { background: accent.tint, color: accent.swatch } : { color: '#6E5F7B' }}
+              >
+                <LayoutDashboard className="h-4 w-4" />
+              </button>
+            </div>
             <button
               onClick={() => handleExportPDF()}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm"
+              className="note-ghost-btn inline-flex items-center gap-2 rounded-xl border border-[#1B1326]/[0.08] bg-white px-4 py-2.5 text-[13px] font-semibold text-[#1B1326]"
             >
-              <Download className="w-4 h-4" />
+              <Download className="h-4 w-4" />
               <span>Export</span>
             </button>
             <button
               onClick={saveWorkspace}
               disabled={isSaving}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-xl hover:bg-blue-600 active:bg-blue-700 disabled:opacity-60 transition-colors duration-150 shadow-sm shadow-blue-200"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#1B1326] px-[18px] py-2.5 text-[13px] font-bold text-[#FBF7F2] shadow-[0_14px_30px_-16px_rgba(27,19,38,0.5)] transition-transform hover:-translate-y-px disabled:opacity-60"
             >
-              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              <span>{isSaving ? 'Saving...' : 'Save Workspace'}</span>
+              {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              <span>{isSaving ? 'Saving…' : 'Save Workspace'}</span>
             </button>
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden relative">
-        <DroppableCanvas 
-          contentRef={contentRef}
-          layoutMode={layoutMode} 
-          layoutRows={layoutRows}
-          sections={sections} 
-          isLoading={isLoading}
-          activeDragItem={activeDragItem}
-          updateSectionContentLocal={updateSectionContentLocal}
-          deleteSection={deleteSection}
-          copiedBlock={copiedBlock}
-          setCopiedBlock={setCopiedBlock}
-          addSectionAt={addSectionAt}
-        />
+      <div className="mx-auto max-w-[1500px] px-5 pb-24 pt-6 sm:px-10">
+        {/* hero */}
+        <section className="mb-6 print:hidden">
+          <div className="mb-3.5 flex flex-wrap items-center gap-2.5 text-[11px] uppercase tracking-[0.06em] text-[#6E5F7B]" style={{ fontFamily: mono }}>
+            {folder && (
+              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-extrabold normal-case tracking-normal" style={{ background: accent.tint, color: accent.swatch }}>
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: accent.swatch }} />
+                {folder.name}
+              </span>
+            )}
+            <span className="opacity-40">·</span>
+            <span>{isDirty ? 'unsaved changes' : 'edited just now'}</span>
+            <span className="opacity-40">·</span>
+            <span>{wordCount} {wordCount === 1 ? 'word' : 'words'}</span>
+          </div>
+          <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+            <h1 className="m-0 font-extrabold leading-[1.04] tracking-[-0.035em]" style={{ fontFamily: bricolage, fontSize: 'clamp(38px, 5.5vw, 68px)' }}>
+              {note ? note.title : 'Loading…'}
+              <span className="bg-clip-text text-transparent" style={{ backgroundImage: `linear-gradient(120deg, ${accent.swatch}, #EC4899)` }}>.</span>
+            </h1>
+            {showTimer && (
+              <div className="mb-1.5 animate-modal-in sm:ml-4">
+                <NoteTimer accent={accent.swatch} accentTint={accent.tint} onClose={() => setShowTimer(false)} />
+              </div>
+            )}
+          </div>
+          {note?.purpose && (
+            <p className="mt-3.5 max-w-[720px] text-base leading-[1.55] text-[#6E5F7B]">{note.purpose}</p>
+          )}
+        </section>
 
-        <div className={`relative flex-shrink-0 transition-[width] duration-300 ease-in-out print:hidden ${isSidebarOpen ? 'w-64' : 'w-0'}`}>
-
-          <aside className={`absolute top-0 right-0 w-64 h-full bg-white border-l border-slate-200 shadow-lg p-5 z-20 flex flex-col gap-3 transition-transform duration-300 ease-in-out overflow-y-auto scrollbar-slim ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-            <div className={`flex flex-col gap-3 transition-opacity duration-300 ${isSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Drag to Add</h3>
-              <DraggableSidebarItem type="text" title="Text Block" icon={Type} colorClass="text-blue-500" onClick={() => addSection('text')} />
-              <DraggableSidebarItem type="checklist" title="Checklist" subtitle="Checks move to bottom" icon={ListTodo} colorClass="text-emerald-500" onClick={() => addSection('checklist')} />
-              <DraggableSidebarItem type="tickbox" title="Tickboxes" subtitle="Static order" icon={CheckSquare} colorClass="text-purple-500" onClick={() => addSection('tickbox')} />
-              <DraggableSidebarItem type="list" title="List" subtitle="Custom styles" icon={ListIcon} colorClass="text-orange-500" onClick={() => addSection('list')} />
-              <DraggableSidebarItem type="table" title="Table" subtitle="Resizable grid" icon={TableIcon} colorClass="text-indigo-500" onClick={() => addSection('table')} />
-              <DraggableSidebarItem type="code" title="Code Block" subtitle="Syntax highlighted" icon={Code2} colorClass="text-zinc-600" onClick={() => addSection('code')} />
+        {/* workspace: drag-to-add (left) · canvas (center) · tools (right).
+            Both side panels sticky so they stay in view, and share one baseline via the
+            grid row's items-start. Below md they collapse so the canvas isn't squished. */}
+        <main className="flex items-start gap-6 print:block">
+          {/* LEFT — drag to add */}
+          <AnimatePresence initial={false}>
+          {leftOpen && (
+            <motion.aside
+              key="left-panel"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 'auto', opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+              className="sticky top-24 hidden shrink-0 self-start overflow-hidden md:block print:hidden"
+            >
+            <div className="flex max-h-[calc(100vh_-_7rem)] w-[64px] flex-col gap-2.5 lg:w-[280px]">
+              <div className="flex flex-shrink-0 items-center justify-center px-1 lg:justify-between">
+                <span className="hidden text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6E5F7B] lg:inline" style={{ fontFamily: mono }}>Drag to add</span>
+                <Plus className="h-3.5 w-3.5 text-[#F59E0B]" />
+              </div>
+              <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-1 py-1.5 -mx-1">
+                {BLOCK_DEFS.map((b) => (
+                  <DraggableSidebarItem
+                    key={b.type}
+                    type={b.type}
+                    title={b.title}
+                    subtitle={b.subtitle}
+                    icon={b.icon}
+                    accent={b.accent}
+                    tint={b.tint}
+                    onClick={() => addSection(b.type)}
+                  />
+                ))}
+              </div>
+              <div className="mt-3 hidden flex-shrink-0 flex-col gap-1.5 rounded-2xl border border-dashed border-[#1B1326]/[0.08] bg-[#1B1326]/[0.03] px-3.5 py-3 text-[11px] text-[#6E5F7B] lg:flex">
+                <p className="m-0">Drag a tile onto the page, or drop one beside a block to make columns.</p>
+                <p className="m-0">⌘Z restores a deleted block.</p>
+              </div>
             </div>
-          </aside>
-        </div>
+            </motion.aside>
+          )}
+          </AnimatePresence>
+
+          {/* CENTER — canvas */}
+          <DroppableCanvas
+            contentRef={contentRef}
+            layoutMode={layoutMode}
+            layoutRows={layoutRows}
+            sections={sections}
+            isLoading={isLoading}
+            activeDragItem={activeDragItem}
+            updateSectionContentLocal={updateSectionContentLocal}
+            updateSectionTitleLocal={updateSectionTitleLocal}
+            deleteSection={deleteSection}
+            copiedBlock={copiedBlock}
+            setCopiedBlock={setCopiedBlock}
+            addSectionAt={addSectionAt}
+          />
+
+          {/* RIGHT — tools */}
+          <AnimatePresence initial={false}>
+          {rightOpen && (
+            <motion.aside
+              key="right-panel"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 'auto', opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+              className="sticky top-24 hidden shrink-0 self-start overflow-hidden md:block print:hidden"
+            >
+            <div className="flex max-h-[calc(100vh_-_7rem)] w-[64px] flex-col gap-2.5 lg:w-[280px]">
+              <div className="flex flex-shrink-0 items-center justify-center px-1 lg:justify-between">
+                <span className="hidden text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6E5F7B] lg:inline" style={{ fontFamily: mono }}>Tools</span>
+                <TimerIcon className="h-3.5 w-3.5 text-[#F59E0B]" />
+              </div>
+              <div className="flex min-h-0 flex-col gap-2 px-1 py-1.5 -mx-1">
+                <ToolCard
+                  icon={TimerIcon}
+                  title="Timer"
+                  subtitle="Countdown + chime"
+                  accent="#8B5CF6"
+                  tint="rgba(139,92,246,0.12)"
+                  active={showTimer}
+                  onClick={() => setShowTimer((v) => !v)}
+                />
+              </div>
+            </div>
+            </motion.aside>
+          )}
+          </AnimatePresence>
+        </main>
       </div>
 
-      <UnsavedChangesModal 
+      <UnsavedChangesModal
         isOpen={blocker.state === 'blocked'}
         onSaveAndLeave={handleSaveAndLeave}
         onLeave={handleLeaveWithoutSaving}
@@ -471,96 +707,155 @@ export function NoteEditorPage() {
       />
       <DragOverlay>
         {activeDragItem ? (
-          <div className="flex items-center gap-3 w-64 px-4 py-3 text-left bg-white border border-blue-300 shadow-2xl rounded-xl opacity-90 scale-105 cursor-grabbing mix-blend-multiply">
-            {activeDragItem.data.current?.icon && <activeDragItem.data.current.icon className={`w-4 h-4 ${activeDragItem.data.current.colorClass}`} />}
+          <div className="flex w-64 items-center gap-3 rounded-2xl border border-[#1B1326]/[0.1] bg-white px-3 py-3 opacity-95 shadow-[0_20px_40px_-16px_rgba(27,19,38,0.35)]">
+            {activeDragItem.data.current?.icon && (
+              <span className="grid h-9 w-9 place-items-center rounded-[10px]" style={{ background: activeDragItem.data.current?.tint ?? 'rgba(139,92,246,0.12)', color: activeDragItem.data.current?.accent ?? '#8B5CF6' }}>
+                <activeDragItem.data.current.icon className="h-[18px] w-[18px]" />
+              </span>
+            )}
             <div className="flex flex-col">
-              <span className="text-sm font-medium text-slate-800">{activeDragItem.data.current?.title}</span>
-              {activeDragItem.data.current?.subtitle && <span className="text-[10px] text-slate-500 font-normal">{activeDragItem.data.current.subtitle}</span>}
+              <span className="text-[13px] font-bold text-[#1B1326]">{activeDragItem.data.current?.title}</span>
+              {activeDragItem.data.current?.subtitle && <span className="text-[11px] font-normal text-[#6E5F7B]">{activeDragItem.data.current.subtitle}</span>}
             </div>
           </div>
         ) : null}
       </DragOverlay>
 
       <button
-        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-        className="fixed bottom-6 right-6 w-12 h-12 bg-white border border-slate-200 rounded-full shadow-lg flex items-center justify-center z-50 hover:bg-slate-50 transition-all duration-300 text-slate-500 hover:text-slate-800 print:hidden"
-        title={isSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+        onClick={() => setLeftOpen((v) => !v)}
+        className="fixed bottom-6 left-6 z-50 hidden h-12 w-12 items-center justify-center rounded-full border border-[#1B1326]/[0.08] bg-white text-[#6E5F7B] shadow-[0_14px_30px_-12px_rgba(27,19,38,0.4)] transition-all hover:text-[#1B1326] md:flex print:hidden"
+        aria-label={leftOpen ? 'Hide left panel' : 'Show left panel'}
+        title={leftOpen ? 'Hide “Drag to add” panel' : 'Show “Drag to add” panel'}
       >
-        {isSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+        {leftOpen ? <ChevronLeft className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
+      </button>
+
+      <button
+        onClick={() => setRightOpen((v) => !v)}
+        className="fixed bottom-6 right-6 z-50 hidden h-12 w-12 items-center justify-center rounded-full border border-[#1B1326]/[0.08] bg-white text-[#6E5F7B] shadow-[0_14px_30px_-12px_rgba(27,19,38,0.4)] transition-all hover:text-[#1B1326] md:flex print:hidden"
+        aria-label={rightOpen ? 'Hide right panel' : 'Show right panel'}
+        title={rightOpen ? 'Hide “Tools” panel' : 'Show “Tools” panel'}
+      >
+        {rightOpen ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
       </button>
     </div>
     </DndContext>
   )
 }
 
-function DroppableCanvas({ contentRef, layoutMode, layoutRows, sections, isLoading, activeDragItem, updateSectionContentLocal, deleteSection, copiedBlock, setCopiedBlock, addSectionAt }: any) {
+function DroppableCanvas({ contentRef, layoutMode, layoutRows, sections, isLoading, activeDragItem, updateSectionContentLocal, updateSectionTitleLocal, deleteSection, copiedBlock, setCopiedBlock, addSectionAt }: any) {
   const { setNodeRef, isOver } = useDroppable({ id: 'canvas-droppable' })
   return (
-    <main className="flex-1 overflow-y-auto p-8 relative transition-colors duration-300 print:p-0">
-      <motion.div ref={contentRef} id="pdf-content-area" layout className={`mx-auto bg-white shadow-xl rounded-sm border border-slate-200 p-10 pb-32 transition-all print:shadow-none print:border-none print:bg-transparent print:p-0 print:m-0 ${layoutMode === 'horizontal' ? 'max-w-6xl min-h-[595px]' : 'max-w-4xl min-h-[842px]'}`}>
+    <section className="flex min-w-0 flex-1 justify-center print:block">
+      <div ref={contentRef} id="pdf-content-area" className={`w-full rounded-[6px] border border-[#1B1326]/[0.08] bg-white p-8 pb-24 shadow-[0_1px_0_rgba(27,19,38,0.04),0_8px_18px_-10px_rgba(27,19,38,0.08),0_30px_60px_-28px_rgba(27,19,38,0.18)] transition-all sm:p-14 print:border-none print:p-0 print:shadow-none ${layoutMode === 'horizontal' ? 'max-w-[1000px] min-h-[700px]' : 'max-w-[760px] min-h-[842px]'}`}>
         {isLoading ? (
-           <div className="flex justify-center pt-20"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+           <div className="flex justify-center pt-20"><Loader2 className="h-6 w-6 animate-spin text-[#6E5F7B]" /></div>
         ) : sections.length === 0 ? (
-          <div ref={setNodeRef} className={`h-full flex flex-col items-center justify-center text-slate-400 space-y-4 pt-20 pb-20 transition-all ${isOver ? 'scale-105 text-blue-500 bg-blue-50/50 rounded-xl' : ''}`}>
-            <p className="text-lg">{isOver ? 'Drop here to create your first block' : 'This note is empty.'}</p>
-            <p className="text-sm">{isOver ? '' : 'Drag a block from the toolbar to start writing.'}</p>
+          <div ref={setNodeRef}>
+            <EmptyNote isOver={isOver} accent="var(--accent)" addSectionAt={addSectionAt} />
           </div>
         ) : (
-          <motion.div layout className="flex flex-col space-y-6 h-full min-h-[500px]">
+          <div className="flex h-full min-h-[500px] flex-col space-y-6">
             <AnimatePresence>
               {layoutRows.map((rowArr: number[]) => (
-                <motion.div layout key={`row-${rowArr.join()}`} className="flex flex-row w-full gap-4 items-start">
+                <div key={`row-${rowArr.join()}`} className="flex w-full flex-row items-start gap-4">
                    {rowArr.map(id => {
                        const section = sections.find((s: any) => s.id === id);
                        if (!section) return null;
                        return (
                            <motion.div
-                             layout
-                             initial={{ opacity: 0, y: 20 }}
+                             initial={{ opacity: 0, y: 8 }}
                              animate={{ opacity: 1, y: 0 }}
-                             exit={{ opacity: 0, scale: 0.95 }}
-                             transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                             exit={{ opacity: 0 }}
+                             transition={SECTION_TRANSITION}
                              key={section.id}
-                             className="flex-[1_1_0%] min-w-0 h-full"
+                             className="h-full min-w-0 flex-[1_1_0%]"
                            >
                              <BlockWrapper
                                section={section}
                                activeDragItem={activeDragItem}
-                               onCopy={() => setCopiedBlock({ type: section.type, content: section.content })}
+                               onCopy={() => {
+                                 const block: CopiedBlock = { type: section.type, content: section.content, title: section.title }
+                                 setCopiedBlock(block)
+                                 saveCopiedBlock(block) // shared across notes + survives reload
+                                 // also place a plain-text version on the OS clipboard for other apps
+                                 navigator.clipboard?.writeText(blockToPlainText(block)).catch(() => {})
+                               }}
                                onPaste={() => {
-                                 if (copiedBlock) addSectionAt(copiedBlock.type, section.id, 'bottom', copiedBlock.content)
+                                 if (copiedBlock) addSectionAt(copiedBlock.type, section.id, 'bottom', copiedBlock.content, copiedBlock.title)
                                }}
                                canPaste={!!copiedBlock}
                                onChange={(content: string) => updateSectionContentLocal(section.id, content)}
+                               onTitleChange={(title: string | null) => updateSectionTitleLocal(section.id, title)}
                                onDelete={() => deleteSection(section.id)}
                                onAddTextBelow={() => addSectionAt('text', section.id, 'bottom')}
                              />
                            </motion.div>
                        )
                    })}
-                </motion.div>
+                </div>
               ))}
             </AnimatePresence>
-            {/* The general canvas dropzone is now a large spacer at the bottom to catch appended blocks */}
-            <div ref={setNodeRef} className={`w-full flex-1 min-h-[150px] transition-all rounded-xl flex items-center justify-center mt-6 ${isOver ? 'bg-blue-50/50 border-2 border-dashed border-blue-400 text-blue-500' : 'border-2 border-transparent'}`}>
+            {/* The general canvas dropzone is a large spacer at the bottom to catch appended blocks */}
+            <div ref={setNodeRef} className={`mt-6 flex min-h-[120px] w-full flex-1 items-center justify-center rounded-xl border-2 transition-all ${isOver ? 'border-dashed' : 'border-transparent'}`} style={isOver ? { borderColor: 'var(--accent)', background: 'var(--accent-tint)', color: 'var(--accent)' } : undefined}>
                 {isOver && activeDragItem && (
-                   <div className="flex items-center gap-2">
-                     <Plus className="w-6 h-6 animate-bounce" />
-                     <span className="font-medium">Drop {activeDragItem.data.current?.title} at the bottom</span>
+                   <div className="flex items-center gap-2 font-medium">
+                     <Plus className="h-6 w-6" />
+                     <span>Drop {activeDragItem.data.current?.title} at the bottom</span>
                    </div>
                 )}
+                {!isOver && (
+                  <button onClick={() => addSectionAt('text', null, 'bottom')} className="flex items-center gap-2.5 px-1.5 py-2 text-[13px] text-[#6E5F7B] opacity-50 transition-opacity hover:opacity-100 print:hidden">
+                    <span className="grid h-[22px] w-[22px] place-items-center rounded-md text-base font-semibold" style={{ background: 'var(--accent-tint)', color: 'var(--accent)' }}>+</span>
+                    <span>Click to write, or drag a block from the right →</span>
+                  </button>
+                )}
             </div>
-          </motion.div>
+          </div>
         )}
-      </motion.div>
-    </main>
+      </div>
+    </section>
   )
 }
 
-function DraggableSidebarItem({ type, title, subtitle, icon: Icon, colorClass, onClick }: any) {
+function EmptyNote({ isOver, accent, addSectionAt }: { isOver: boolean, accent: string, addSectionAt: (type: string, targetId: number | null, position: 'top' | 'bottom' | 'left' | 'right', customContent?: string) => void }) {
+  return (
+    <div className={`flex flex-col items-center justify-center px-5 pb-12 pt-20 text-center transition-all ${isOver ? 'rounded-2xl' : ''}`} style={isOver ? { background: 'var(--accent-tint)' } : undefined}>
+      <div className="mb-[18px] grid h-12 w-12 place-items-center rounded-[14px]" style={{ background: 'var(--accent-tint)', color: accent }}>
+        <Plus className="h-6 w-6" />
+      </div>
+      <h2 className="m-0 mb-2.5 text-[28px] font-extrabold tracking-[-0.025em] text-[#1B1326]" style={{ fontFamily: bricolage }}>
+        {isOver ? 'Drop to create your first block' : 'This page is a blank one.'}
+      </h2>
+      <p className="m-0 mb-7 text-[15px] leading-[1.5] text-[#6E5F7B]">
+        <span className="mr-1.5 align-[-2px] text-[22px] font-bold" style={{ fontFamily: "'Caveat', cursive", color: accent }}>Start anywhere →</span>
+        tap a tile to drop a block, or just click below to write.
+      </p>
+      <div className="flex flex-wrap justify-center gap-2 print:hidden">
+        <EmptyPill icon={Type} label="Start writing" onClick={() => addSectionAt('text', null, 'bottom')} />
+        <EmptyPill icon={ListTodo} label="New checklist" onClick={() => addSectionAt('checklist', null, 'bottom')} />
+        <EmptyPill icon={TableIcon} label="Insert a table" onClick={() => addSectionAt('table', null, 'bottom')} />
+        <EmptyPill icon={Code2} label="Add code" onClick={() => addSectionAt('code', null, 'bottom')} />
+      </div>
+    </div>
+  )
+}
+
+function EmptyPill({ icon: Icon, label, onClick }: { icon: React.ElementType, label: string, onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="note-ghost-btn inline-flex items-center gap-2 rounded-full border border-[#1B1326]/[0.08] bg-white px-3.5 py-2 text-[13px] font-semibold text-[#1B1326]"
+    >
+      <Icon className="h-3.5 w-3.5" /> {label}
+    </button>
+  )
+}
+
+function DraggableSidebarItem({ type, title, subtitle, icon: Icon, accent, tint, onClick }: any) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `draggable-${type}`,
-    data: { type, title, icon: Icon, colorClass, subtitle },
+    data: { type, title, icon: Icon, colorClass: '', subtitle, accent, tint },
   })
 
   return (
@@ -569,13 +864,41 @@ function DraggableSidebarItem({ type, title, subtitle, icon: Icon, colorClass, o
       {...listeners}
       {...attributes}
       onClick={onClick}
-      className={`flex items-center gap-3 w-full px-4 py-3 text-left bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all duration-300 text-sm font-medium text-slate-700 hover:shadow-md hover:-translate-y-0.5 ${isDragging ? 'opacity-30 scale-95' : 'opacity-100'}`}
+      style={{ ['--card-accent' as string]: accent } as React.CSSProperties}
+      title={title}
+      className={`note-dock-card grid w-full cursor-grab place-items-center grid-cols-1 gap-0 p-2.5 lg:place-items-stretch lg:grid-cols-[36px_1fr_16px] lg:items-center lg:gap-2.5 lg:p-3 rounded-2xl border border-[#1B1326]/[0.08] bg-white text-left active:cursor-grabbing ${isDragging ? 'opacity-30' : 'opacity-100'}`}
     >
-      <Icon className={`w-4 h-4 ${colorClass}`} />
-      <div className="flex flex-col">
-        <span>{title}</span>
-        {subtitle && <span className="text-[10px] text-slate-400 font-normal">{subtitle}</span>}
-      </div>
+      <span className="grid h-9 w-9 place-items-center rounded-[10px]" style={{ background: tint, color: accent }}>
+        <Icon className="h-[18px] w-[18px]" />
+      </span>
+      <span className="hidden lg:flex min-w-0 flex-col">
+        <span className="text-[13px] font-bold tracking-[-0.005em] text-[#1B1326]">{title}</span>
+        {subtitle && <span className="text-[11px] leading-tight text-[#6E5F7B]">{subtitle}</span>}
+      </span>
+      <span className="hidden lg:inline text-[12px] tracking-[-2px] text-[#6E5F7B] opacity-50">⋮⋮</span>
+    </button>
+  )
+}
+
+// A Tools-panel entry. Same card shell as DraggableSidebarItem (so the two flanking
+// panels read as one system) but a plain toggle button rather than a drag source.
+function ToolCard({ icon: Icon, title, subtitle, accent, tint, active, onClick }: { icon: React.ElementType, title: string, subtitle?: string, accent: string, tint: string, active?: boolean, onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      style={{ ['--card-accent' as string]: accent, background: active ? tint : 'white', borderColor: active ? accent : 'rgba(27,19,38,0.08)' } as React.CSSProperties}
+      className="note-dock-card grid w-full place-items-center grid-cols-1 gap-0 rounded-2xl border p-2.5 text-left lg:grid-cols-[36px_1fr_16px] lg:items-center lg:place-items-stretch lg:gap-2.5 lg:p-3"
+    >
+      <span className="grid h-9 w-9 place-items-center rounded-[10px]" style={{ background: active ? 'white' : tint, color: accent }}>
+        <Icon className="h-[18px] w-[18px]" />
+      </span>
+      <span className="hidden min-w-0 flex-col lg:flex">
+        <span className="text-[13px] font-bold tracking-[-0.005em] text-[#1B1326]">{title}</span>
+        {subtitle && <span className="text-[11px] leading-tight text-[#6E5F7B]">{subtitle}</span>}
+      </span>
+      <span className="hidden h-2 w-2 place-self-center rounded-full transition-colors lg:block" style={{ background: active ? accent : 'rgba(27,19,38,0.15)' }} />
     </button>
   )
 }
@@ -583,14 +906,14 @@ function DraggableSidebarItem({ type, title, subtitle, icon: Icon, colorClass, o
 function UnsavedChangesModal({ isOpen, onSaveAndLeave, onLeave, onCancel }: { isOpen: boolean, onSaveAndLeave: () => void, onLeave: () => void, onCancel: () => void }) {
   if (!isOpen) return null
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 transition-opacity" style={{ backgroundColor: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(3px)' }}>
-      <div role="dialog" className="w-full max-w-sm bg-white rounded-2xl shadow-xl ring-1 ring-slate-200 p-6 animate-modal-in">
-        <h3 className="text-lg font-semibold text-slate-800 mb-2">Unsaved Changes</h3>
-        <p className="text-sm text-slate-500 mb-6">Do you want to save the work? Your recent changes have not been saved.</p>
-        <div className="flex flex-col sm:flex-row items-center justify-end gap-3 w-full">
-          <button onClick={onCancel} className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors">Cancel</button>
-          <button onClick={onLeave} className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-red-600 bg-red-50 rounded-xl hover:bg-red-100 transition-colors">Leave without saving</button>
-          <button onClick={onSaveAndLeave} className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-xl hover:bg-blue-600 active:bg-blue-700 shadow-sm shadow-blue-200 transition-colors">Save & Leave</button>
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-6" style={{ backgroundColor: 'rgba(27, 19, 38, 0.45)', backdropFilter: 'blur(4px)' }}>
+      <div role="dialog" className="w-full max-w-[440px] rounded-3xl bg-white p-6 shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in" style={{ fontFamily: geist, color: '#1B1326' }}>
+        <h3 className="m-0 mb-1.5 text-[20px] font-extrabold tracking-[-0.02em]" style={{ fontFamily: bricolage }}>Unsaved changes</h3>
+        <p className="mb-6 text-sm text-[#6E5F7B]">Do you want to save your work? Your recent changes haven't been saved.</p>
+        <div className="flex flex-col items-center justify-end gap-2.5 sm:flex-row">
+          <button onClick={onCancel} className="w-full rounded-xl border-[1.5px] border-[#1B1326]/10 bg-white px-4 py-2.5 text-sm font-semibold text-[#1B1326] transition-colors hover:bg-[#F4F5F8] sm:w-auto">Cancel</button>
+          <button onClick={onLeave} className="w-full rounded-xl bg-[#DC2626]/10 px-4 py-2.5 text-sm font-semibold text-[#B91C1C] transition-colors hover:bg-[#DC2626]/15 sm:w-auto">Leave without saving</button>
+          <button onClick={onSaveAndLeave} className="w-full rounded-xl bg-[#1B1326] px-4 py-2.5 text-sm font-bold text-[#FBF7F2] transition-transform hover:-translate-y-px sm:w-auto">Save &amp; leave</button>
         </div>
       </div>
     </div>,
@@ -598,7 +921,7 @@ function UnsavedChangesModal({ isOpen, onSaveAndLeave, onLeave, onCancel }: { is
   )
 }
 
-function BlockWrapper({ section, onChange, onDelete, activeDragItem, onCopy, onPaste, canPaste, onAddTextBelow }: any) {
+function BlockWrapper({ section, onChange, onTitleChange, onDelete, activeDragItem, onCopy, onPaste, canPaste, onAddTextBelow }: any) {
     const { setNodeRef: setDragRef, attributes, listeners, isDragging } = useDraggable({
         id: `existing-${section.id}`,
         data: { type: section.type, id: section.id, isExisting: true, title: 'Block', icon: GripVertical, colorClass: 'text-slate-500' }
@@ -609,49 +932,49 @@ function BlockWrapper({ section, onChange, onDelete, activeDragItem, onCopy, onP
     const leftDrop = useDroppable({ id: `drop-left-${section.id}` });
     const rightDrop = useDroppable({ id: `drop-right-${section.id}` });
 
+    const indicator = (over: boolean, vertical: boolean) =>
+      `${vertical ? 'h-full w-2' : 'w-full h-2'} rounded-full transition-all duration-200 ${over ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`
+
     return (
-        <div className={`relative flex flex-col group/wrapper w-full h-full ${isDragging ? 'opacity-30 scale-95' : ''} transition-all duration-300`}>
-             
+        <div className={`group/wrapper relative flex h-full w-full flex-col ${isDragging ? 'scale-95 opacity-30' : ''} transition-all duration-300`}>
+
             {/* Edge Drop Zones */}
             {activeDragItem && !isDragging && (
                <>
-                 {/* Top */}
-                 <div ref={topDrop.setNodeRef} className="absolute -top-4 left-0 right-0 h-8 pointer-events-auto z-30 flex items-center justify-center print:hidden">
-                    <div className={`w-full h-2 outline outline-blue-200 rounded-full bg-blue-500 transition-all duration-200 ${topDrop.isOver ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`} />
+                 <div ref={topDrop.setNodeRef} className="pointer-events-auto absolute -top-4 left-0 right-0 z-30 flex h-8 items-center justify-center print:hidden">
+                    <div className={indicator(topDrop.isOver, false)} style={{ background: 'var(--accent)' }} />
                  </div>
-                 {/* Bottom */}
-                 <div ref={bottomDrop.setNodeRef} className="absolute -bottom-4 left-0 right-0 h-8 pointer-events-auto z-30 flex items-center justify-center print:hidden">
-                    <div className={`w-full h-2 outline outline-blue-200 rounded-full bg-blue-500 transition-all duration-200 ${bottomDrop.isOver ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`} />
+                 <div ref={bottomDrop.setNodeRef} className="pointer-events-auto absolute -bottom-4 left-0 right-0 z-30 flex h-8 items-center justify-center print:hidden">
+                    <div className={indicator(bottomDrop.isOver, false)} style={{ background: 'var(--accent)' }} />
                  </div>
-                 {/* Left */}
-                 <div ref={leftDrop.setNodeRef} className="absolute top-0 bottom-0 -left-4 w-8 pointer-events-auto z-30 flex items-center justify-center print:hidden">
-                    <div className={`h-full w-2 outline outline-blue-200 rounded-full bg-blue-500 transition-all duration-200 ${leftDrop.isOver ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`} />
+                 <div ref={leftDrop.setNodeRef} className="pointer-events-auto absolute -left-4 bottom-0 top-0 z-30 flex w-8 items-center justify-center print:hidden">
+                    <div className={indicator(leftDrop.isOver, true)} style={{ background: 'var(--accent)' }} />
                  </div>
-                 {/* Right */}
-                 <div ref={rightDrop.setNodeRef} className="absolute top-0 bottom-0 -right-4 w-8 pointer-events-auto z-30 flex items-center justify-center print:hidden">
-                    <div className={`h-full w-2 outline outline-blue-200 rounded-full bg-blue-500 transition-all duration-200 ${rightDrop.isOver ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`} />
+                 <div ref={rightDrop.setNodeRef} className="pointer-events-auto absolute -right-4 bottom-0 top-0 z-30 flex w-8 items-center justify-center print:hidden">
+                    <div className={indicator(rightDrop.isOver, true)} style={{ background: 'var(--accent)' }} />
                  </div>
                </>
             )}
 
             {/* Drag Handle */}
-            <div 
-               ref={setDragRef} 
-               {...attributes} 
-               {...listeners} 
-               className="absolute -left-6 top-1/2 -translate-y-1/2 p-1 text-slate-300 hover:text-slate-500 cursor-grab active:cursor-grabbing opacity-0 group-hover/wrapper:opacity-100 z-10 transition-opacity print:hidden"
+            <div
+               ref={setDragRef}
+               {...attributes}
+               {...listeners}
+               className="absolute -left-6 top-1/2 z-10 -translate-y-1/2 cursor-grab p-1 text-[#1B1326]/25 opacity-0 transition-opacity hover:text-[#1B1326]/50 active:cursor-grabbing group-hover/wrapper:opacity-100 print:hidden"
             >
-               <GripVertical className="w-4 h-4" />
+               <GripVertical className="h-4 w-4" />
             </div>
 
-            <BlockRenderer section={section} onChange={onChange} onDelete={onDelete} onCopy={onCopy} onPaste={onPaste} canPaste={canPaste} onAddTextBelow={onAddTextBelow} />
+            <BlockRenderer section={section} onChange={onChange} onTitleChange={onTitleChange} onDelete={onDelete} onCopy={onCopy} onPaste={onPaste} canPaste={canPaste} onAddTextBelow={onAddTextBelow} />
         </div>
     )
 }
 
-function BlockRenderer({ section, onChange, onDelete, onCopy, onPaste, canPaste, onAddTextBelow }: { section: SectionData, onChange: (c: string) => void, onDelete: () => void, onCopy: () => void, onPaste: () => void, canPaste: boolean, onAddTextBelow?: () => void }) {
+function BlockRenderer({ section, onChange, onTitleChange, onDelete, onCopy, onPaste, canPaste, onAddTextBelow }: { section: SectionData, onChange: (c: string) => void, onTitleChange: (t: string | null) => void, onDelete: () => void, onCopy: () => void, onPaste: () => void, canPaste: boolean, onAddTextBelow?: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const showTitle = blockShowsTitle(section);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -665,47 +988,79 @@ function BlockRenderer({ section, onChange, onDelete, onCopy, onPaste, canPaste,
   }, [menuOpen]);
 
   return (
-    <div className="group/block relative w-full h-full border border-slate-200 bg-slate-50/50 rounded-xl p-4 pr-14 hover:border-slate-300 hover:shadow-md transition-all duration-300 print:border-none print:shadow-none print:bg-transparent print:p-0 print:pr-0 print:border-transparent">
-      <div className="absolute top-2 right-2 z-10 print:hidden" ref={menuRef}>
-        <button 
+    <div className="note-block-box group/block relative h-full w-full rounded-2xl border border-[#1B1326]/[0.08] bg-white p-4 pr-14 print:border-none print:bg-transparent print:p-0 print:pr-0">
+      <div className="absolute right-2 top-2 z-10 print:hidden" ref={menuRef}>
+        <button
           onClick={() => setMenuOpen(!menuOpen)}
-          className={`p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 rounded-lg transition-all ${menuOpen ? 'opacity-100 bg-slate-200/50' : 'opacity-0 group-hover/block:opacity-100'}`}
+          className={`rounded-lg p-1.5 text-[#6E5F7B] transition-all hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326] ${menuOpen ? 'bg-[#1B1326]/[0.06] opacity-100' : 'opacity-0 group-hover/block:opacity-100'}`}
           title="Block options"
         >
-          <MoreVertical className="w-5 h-5" />
+          <MoreVertical className="h-5 w-5" />
         </button>
 
         {menuOpen && (
-          <div className="absolute right-0 mt-1 w-36 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden py-1 z-50">
-            <button 
+          <div className="absolute right-0 mt-1 w-36 overflow-hidden rounded-xl border border-[#1B1326]/[0.08] bg-white py-1.5 shadow-[0_10px_24px_-8px_rgba(27,19,38,0.18),0_24px_60px_-20px_rgba(27,19,38,0.3)] animate-modal-in z-50">
+            <button
               onClick={() => { onCopy(); setMenuOpen(false); }}
-              className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] font-medium text-[#1B1326] transition-colors hover:bg-[#7758A3]/[0.08]"
             >
-              <Copy className="w-4 h-4" /> Copy
+              <Copy className="h-4 w-4" /> Copy
             </button>
-            <button 
+            <button
               onClick={() => { onPaste(); setMenuOpen(false); }}
               disabled={!canPaste}
-              className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 ${canPaste ? 'text-slate-700 hover:bg-slate-100' : 'text-slate-400 opacity-50 cursor-not-allowed'}`}
+              className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] font-medium transition-colors ${canPaste ? 'text-[#1B1326] hover:bg-[#7758A3]/[0.08]' : 'cursor-not-allowed text-[#6E5F7B] opacity-50'}`}
             >
-              <ClipboardPaste className="w-4 h-4" /> Paste
+              <ClipboardPaste className="h-4 w-4" /> Paste
             </button>
-            <button 
+            {canHaveTitle(section.type) && (
+              showTitle ? (
+                <button
+                  onClick={() => { onTitleChange(null); setMenuOpen(false); }}
+                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] font-medium text-[#1B1326] transition-colors hover:bg-[#7758A3]/[0.08]"
+                >
+                  <Heading className="h-4 w-4" /> Remove title
+                </button>
+              ) : (
+                <button
+                  onClick={() => { onTitleChange(''); setMenuOpen(false); }}
+                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] font-medium text-[#1B1326] transition-colors hover:bg-[#7758A3]/[0.08]"
+                >
+                  <Heading className="h-4 w-4" /> Add title
+                </button>
+              )
+            )}
+            <button
               onClick={() => { onDelete(); setMenuOpen(false); }}
-              className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] font-medium text-[#B91C1C] transition-colors hover:bg-[#DC2626]/[0.08]"
             >
-              <Trash2 className="w-4 h-4" /> Delete
+              <Trash2 className="h-4 w-4" /> Delete
             </button>
           </div>
         )}
       </div>
-      
+
+      {showTitle && (
+        <div className="relative mb-3">
+          {isBlankHtml(section.title) && (
+            <span className="pointer-events-none absolute left-1 top-1 text-[15px] tracking-[-0.01em] text-[#1B1326]/30">
+              Untitled
+            </span>
+          )}
+          <RichTextEditor
+            content={section.title ?? ''}
+            onChange={(html) => onTitleChange(html)}
+            className="text-[15px] tracking-[-0.01em] text-[#1B1326]"
+          />
+        </div>
+      )}
+
       {section.type === 'text' && (
         <RichTextEditor
           content={section.content}
           onChange={onChange}
           placeholder="Start typing..."
-          className="text-slate-800 leading-relaxed min-h-[4rem]"
+          className="min-h-[4rem] leading-relaxed text-[#1B1326]"
           onEnter={onAddTextBelow}
         />
       )}
@@ -724,6 +1079,10 @@ function BlockRenderer({ section, onChange, onDelete, onCopy, onPaste, canPaste,
 
       {section.type === 'code' && (
         <CodeBlock content={section.content} onChange={onChange} />
+      )}
+
+      {section.type === 'image' && (
+        <ImageBlock content={section.content} onChange={onChange} />
       )}
     </div>
   )
@@ -764,48 +1123,53 @@ function ListRenderer({ section, onChange }: { section: SectionData, onChange: (
         onChange(JSON.stringify([...items, newItem]))
     }
   }
-  
+
   const handleRemove = (id: string) => {
     const newItems = items.filter(i => i.id !== id)
     updateItems(newItems)
   }
 
   return (
-    <div className="w-full pl-3 border-l-2 border-slate-200 transition-colors">
+    <div className="w-full border-l-2 pl-3 transition-colors" style={{ borderColor: 'var(--accent-tint)' }}>
       <div className="space-y-2">
         {items.map(item => (
-          <div key={item.id} className="flex items-start gap-3 group">
-            <input 
-              type="checkbox" 
-              checked={item.checked} 
-              onChange={() => handleToggle(item.id)} 
-              className={`mt-1.5 w-4 h-4 border-slate-300 transition-all cursor-pointer ${isDynamic ? 'rounded-full text-emerald-500 focus:ring-emerald-500' : 'rounded text-purple-500 focus:ring-purple-500'}`}
+          <div key={item.id} className="group flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={item.checked}
+              onChange={() => handleToggle(item.id)}
+              className={`mt-1.5 h-4 w-4 cursor-pointer border-[#1B1326]/25 transition-all ${isDynamic ? 'rounded-full text-emerald-500 focus:ring-emerald-500' : 'rounded text-[#EC4899] focus:ring-[#EC4899]'}`}
             />
-            <div className={`flex-1 ${item.checked ? 'opacity-50 line-through' : ''} transition-all duration-300`}>
+            <div className={`flex-1 ${item.checked ? 'line-through opacity-50' : ''} transition-all duration-300`}>
               <RichTextEditor
                 content={item.text}
                 onChange={(html) => handleTextChange(item.id, html)}
                 onEnter={handleAdd}
                 placeholder="List item..."
-                className="text-slate-800 leading-relaxed"
+                className="leading-relaxed text-[#1B1326]"
               />
             </div>
-            <button 
+            <button
               onClick={() => handleRemove(item.id)}
-              className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-400 transition-opacity print:hidden"
+              className="p-1 text-[#1B1326]/25 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100 print:hidden"
             >
-              <Plus className="w-4 h-4 rotate-45" />
+              <Plus className="h-4 w-4 rotate-45" />
             </button>
           </div>
         ))}
       </div>
-      <button 
+      <button
         onClick={handleAdd}
-        className="mt-3 text-xs font-semibold text-slate-400 hover:text-slate-600 flex items-center gap-1 transition-colors pl-7 print:hidden"
+        className="mt-3 flex items-center gap-1 pl-7 text-xs font-semibold text-[#6E5F7B] transition-colors hover:text-[#1B1326] print:hidden"
       >
-        <Plus className="w-3 h-3" />
+        <Plus className="h-3 w-3" />
         Add Item
       </button>
+      {items.length > 0 && (
+        <div className="mt-2 pl-7 text-[11px] font-medium tracking-wide text-[#1B1326]/35">
+          {items.filter(i => i.checked).length}/{items.length} completed
+        </div>
+      )}
     </div>
   )
 }

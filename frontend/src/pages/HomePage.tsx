@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { CreateFolderModal } from '../components/CreateFolderModal'
 import { ConfirmationModal } from '../components/ConfirmationModal'
 import { Header } from '../components/Header'
+import { API_BASE } from '../lib/api'
 
 interface FolderItem {
   id: number
@@ -22,7 +23,7 @@ export function HomePage() {
 
   const fetchFolders = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/folders/')
+      const res = await fetch(`${API_BASE}/folders/`)
       if (res.ok) {
         const data: FolderItem[] = await res.json()
         setFolders(data)
@@ -121,7 +122,7 @@ function FolderCard({ folder, onDeleteSuccess }: { folder: FolderItem, onDeleteS
 
   const handleDelete = async () => {
     try {
-      const res = await fetch(`http://localhost:8000/folders/${folder.id}`, { method: 'DELETE' })
+      const res = await fetch(`${API_BASE}/folders/${folder.id}`, { method: 'DELETE' })
       if (res.ok) onDeleteSuccess()
     } catch {
        // Ignore error

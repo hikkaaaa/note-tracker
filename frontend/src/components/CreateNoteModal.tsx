@@ -1,171 +1,224 @@
 import { useState, useEffect, useRef } from 'react'
-import { X, FilePlus, Loader2 } from 'lucide-react'
-
-interface CreateNoteModalProps {
-  isOpen: boolean
-  onClose: () => void
-  onSuccess?: () => void
-  folderId: string
-  onCreate?: (note: FormState) => void
-}
+import { X, NotebookPen } from 'lucide-react'
+import type { FolderColor } from '../lib/localWorkspace'
+import { COLOR_ORDER, FOLDER_SWATCHES, getSwatch } from '../lib/folderColors'
 
 export interface FormState {
   name: string
   purpose: string
+  color: FolderColor
 }
 
-export function CreateNoteModal({ isOpen, onClose, onSuccess, folderId, onCreate }: CreateNoteModalProps) {
-  const [form, setForm] = useState<FormState>({ name: '', purpose: '' })
-  const [isLoading, setIsLoading] = useState(false)
+export interface NoteInitial {
+  title: string
+  purpose?: string
+  color?: FolderColor
+}
+
+interface CreateNoteModalProps {
+  isOpen: boolean
+  onClose: () => void
+  onSubmit: (form: FormState) => void
+  folderName: string
+  folderColor: FolderColor
+  initialNote?: NoteInitial | null
+}
+
+const NAME_LIMIT = 60
+const PURPOSE_LIMIT = 140
+const bricolage = "'Bricolage Grotesque', sans-serif"
+
+export function CreateNoteModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  folderName,
+  folderColor,
+  initialNote,
+}: CreateNoteModalProps) {
+  const isEdit = Boolean(initialNote)
+  const [name, setName] = useState('')
+  const [purpose, setPurpose] = useState('')
+  const [color, setColor] = useState<FolderColor>(folderColor)
   const [error, setError] = useState<string | null>(null)
-  const nameInputRef = useRef<HTMLInputElement>(null)
+  const nameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (isOpen) {
-      setForm({ name: '', purpose: '' })
-      setError(null)
-      setTimeout(() => nameInputRef.current?.focus(), 50)
-    }
-  }, [isOpen])
+    if (!isOpen) return
+    setName(initialNote?.title ?? '')
+    setPurpose(initialNote?.purpose && initialNote.purpose !== '—' ? initialNote.purpose : '')
+    setColor(initialNote?.color ?? folderColor)
+    setError(null)
+    setTimeout(() => nameRef.current?.focus(), 50)
+  }, [isOpen, initialNote, folderColor])
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isOpen) onClose()
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [isOpen, onClose])
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  if (!isOpen) return null
+
+  const folderSw = getSwatch(folderColor)
+  const selected = getSwatch(color)
+  const purposeChars = purpose.length
+  const overLimit = purposeChars > PURPOSE_LIMIT
+  const canSubmit = name.trim().length > 0 && !overLimit
+
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.name.trim()) {
+    if (!name.trim()) {
       setError('Note name is required.')
       return
     }
-
-    setIsLoading(true)
-    setError(null)
-
-    if (onCreate) {
-      onCreate({ name: form.name.trim(), purpose: form.purpose.trim() })
-      onSuccess?.()
-      onClose()
-      setIsLoading(false)
-      return
-    }
-
-    try {
-      const response = await fetch(`http://localhost:8000/folders/${folderId}/notes/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: form.name.trim(), purpose: form.purpose.trim() }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
-        throw new Error(data?.detail ?? `Server error (${response.status})`)
-      }
-
-      onSuccess?.()
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
-    } finally {
-      setIsLoading(false)
-    }
+    onSubmit({ name: name.trim(), purpose: purpose.trim(), color })
+    onClose()
   }
-
-  if (!isOpen) return null
 
   return (
     <div
       id="create-note-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.35)', backdropFilter: 'blur(4px)' }}
+      className="fixed inset-0 z-[200] flex items-center justify-center p-6"
+      style={{ backgroundColor: 'rgba(27, 19, 38, 0.45)', backdropFilter: 'blur(4px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div
         id="create-note-modal"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-title"
-        className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl ring-1 ring-slate-200 animate-modal-in"
+        aria-labelledby="new-note-title"
+        className="relative max-h-[calc(100vh-48px)] w-full max-w-[560px] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in"
+        style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif", color: '#1B1326', ['--accent' as string]: folderSw.swatch, ['--accent-tint' as string]: folderSw.tint } as React.CSSProperties}
       >
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-blue-50">
-              <FilePlus className="w-5 h-5 text-blue-500" />
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[#1B1326]/[0.07] px-6 pb-5 pt-[22px]">
+          <div className="flex items-center gap-3.5">
+            <span
+              className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl"
+              style={{ background: `linear-gradient(135deg, ${folderSw.tint}, rgba(236,72,153,0.10))` }}
+            >
+              <NotebookPen className="h-[26px] w-[26px]" strokeWidth={2.2} style={{ color: 'var(--accent)' }} />
             </span>
-            <h2 id="modal-title" className="text-lg font-semibold text-slate-800">
-              New Note
-            </h2>
+            <div>
+              <h2 id="new-note-title" className="m-0 text-[22px] font-extrabold tracking-[-0.025em]" style={{ fontFamily: bricolage }}>
+                {isEdit ? 'Edit Note' : 'New Note'}
+              </h2>
+              <p className="mt-1 text-[13px] text-[#6E5F7B]">
+                in{' '}
+                <span
+                  className="ml-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-[3px] text-xs font-bold"
+                  style={{ background: folderSw.tint, color: folderSw.swatch }}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: folderSw.swatch }} />
+                  {folderName}
+                </span>
+              </p>
+            </div>
           </div>
           <button
             id="close-modal-btn"
             onClick={onClose}
-            aria-label="Close modal"
-            className="flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors duration-150"
+            aria-label="Close"
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] text-[#6E5F7B] transition-colors hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326]"
           >
-            <X className="w-4 h-4" />
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
 
-        <form id="create-note-form" onSubmit={handleSubmit} noValidate>
-          <div className="px-6 py-5 space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="note-name" className="block text-sm font-medium text-slate-700">
-                Note Name <span className="text-red-400">*</span>
-              </label>
-              <input
-                ref={nameInputRef}
-                id="note-name"
-                type="text"
-                placeholder="e.g. Q1 Marketing Plan"
-                value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="w-full px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all duration-150 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor="note-purpose" className="block text-sm font-medium text-slate-700">
-                Purpose
-                <span className="ml-1.5 text-xs font-normal text-slate-400">(optional)</span>
-              </label>
-              <textarea
-                id="note-purpose"
-                rows={3}
-                placeholder="e.g. Brainstorming session for the new campaign"
-                value={form.purpose}
-                onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))}
-                className="w-full px-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all duration-150 focus:bg-white focus:border-blue-400 focus:ring-2 focus:ring-blue-100 resize-none"
-              />
-            </div>
-
-            {error && (
-              <p className="text-sm text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-                {error}
-              </p>
-            )}
+        {/* Body */}
+        <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-5 px-6 pb-6 pt-[22px]">
+          <div className="flex flex-col gap-2">
+            <label htmlFor="note-name" className="text-[15px] font-bold tracking-[-0.01em]">
+              Note Name <span className="text-[#EC4899]">*</span>
+            </label>
+            <input
+              ref={nameRef}
+              id="note-name"
+              type="text"
+              placeholder="e.g. Q1 Marketing Plan"
+              value={name}
+              maxLength={NAME_LIMIT}
+              onChange={(e) => setName(e.target.value)}
+              className="bloom-field w-full rounded-xl border-[1.5px] border-transparent bg-[#F4F5F8] px-3.5 py-3 text-[15px] outline-none placeholder:text-[#94A3B8]"
+            />
           </div>
 
-          <div className="flex items-center justify-end gap-3 px-6 pb-6 pt-2">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="note-purpose" className="text-[15px] font-bold tracking-[-0.01em]">
+                Purpose <span className="ml-1 text-sm font-medium text-[#6E5F7B]">(optional)</span>
+              </label>
+              <span className={`font-mono text-[11px] ${overLimit ? 'font-semibold text-[#EC4899]' : 'text-[#6E5F7B]'}`}>
+                {purposeChars}/{PURPOSE_LIMIT}
+              </span>
+            </div>
+            <textarea
+              id="note-purpose"
+              rows={3}
+              placeholder="e.g. Brainstorming session for the new campaign"
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value.slice(0, PURPOSE_LIMIT))}
+              className="bloom-field min-h-[96px] w-full resize-y rounded-xl border-[1.5px] border-transparent bg-[#F4F5F8] px-3.5 py-3 text-[15px] leading-relaxed outline-none placeholder:text-[#94A3B8]"
+            />
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[15px] font-bold tracking-[-0.01em]">Note Color</label>
+              <span className="font-mono text-[11px] text-[#6E5F7B]">{selected.label}</span>
+            </div>
+            <div className="flex flex-wrap gap-3" role="radiogroup" aria-label="Note color">
+              {COLOR_ORDER.map((id) => {
+                const sw = FOLDER_SWATCHES[id]
+                const on = color === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    aria-label={sw.label}
+                    title={sw.label}
+                    onClick={() => setColor(id)}
+                    className={`h-9 w-9 rounded-full border-[3px] border-white p-0 transition-transform ${on ? '' : 'hover:scale-110'}`}
+                    style={{
+                      backgroundColor: sw.swatch,
+                      outline: on ? `2px solid ${sw.swatch}` : '2px solid transparent',
+                      outlineOffset: '2px',
+                      boxShadow: on ? `0 4px 10px -2px ${sw.swatch}` : '0 1px 3px rgba(15,23,42,0.10)',
+                    }}
+                  />
+                )
+              })}
+            </div>
+          </div>
+
+          {error && (
+            <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-500">{error}</p>
+          )}
+
+          <div className="mt-1 flex items-center justify-end gap-2.5">
             <button
               type="button"
-              id="cancel-btn"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors duration-150"
+              className="rounded-xl border-[1.5px] border-[#1B1326]/10 bg-white px-[22px] py-[11px] text-sm font-semibold text-[#1B1326] transition-colors hover:bg-[#F4F5F8]"
             >
               Cancel
             </button>
             <button
               type="submit"
               id="create-note-submit-btn"
-              disabled={isLoading}
-              className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white bg-blue-500 rounded-xl hover:bg-blue-600 active:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors duration-150 shadow-sm shadow-blue-200"
+              disabled={!canSubmit}
+              className="rounded-xl px-[22px] py-[11px] text-sm font-bold text-white transition-transform hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
+              style={{
+                background: selected.swatch,
+                boxShadow: canSubmit ? `0 8px 16px -6px ${selected.swatch}80` : 'none',
+              }}
             >
-              {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-              {isLoading ? 'Creating…' : 'Create Note'}
+              {isEdit ? 'Save Changes' : 'Create Note'}
             </button>
           </div>
         </form>

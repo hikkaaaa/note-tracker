@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import DefaultEditor from 'react-simple-code-editor'
 const Editor: any = (DefaultEditor as any).default || DefaultEditor
 import Prism from 'prismjs'
@@ -30,6 +30,15 @@ export function CodeBlock({ content, onChange }: { content: string, onChange: (c
   } catch {}
 
   const [copied, setCopied] = useState(false)
+  const titleRef = useRef<HTMLTextAreaElement>(null)
+
+  // Grow the title to fit its content so long titles wrap and stay fully visible.
+  const autosizeTitle = (el: HTMLTextAreaElement | null) => {
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(() => { autosizeTitle(titleRef.current) }, [data.language])
 
   const update = (newLang: string, newCode: string) => {
     onChange(JSON.stringify({ language: newLang, code: newCode }))
@@ -52,18 +61,19 @@ export function CodeBlock({ content, onChange }: { content: string, onChange: (c
       <div className="w-full bg-[#1e1e1e] rounded-xl overflow-hidden shadow-sm flex flex-col font-mono text-sm border border-black/10">
         
         {/* Header Bar */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-[#2d2d2d] border-b border-white/5 text-slate-300">
-          <input 
-            type="text"
+        <div className="flex items-start justify-between gap-2 px-4 py-2.5 bg-[#2d2d2d] border-b border-white/5 text-slate-300">
+          <textarea
+            ref={titleRef}
+            rows={1}
             value={data.language}
-            onChange={(e) => update(e.target.value, data.code)}
+            onChange={(e) => { update(e.target.value, data.code); autosizeTitle(e.target) }}
             placeholder="Title or Language..."
-            className="bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-[13px] font-semibold tracking-wide text-slate-300 placeholder:text-slate-500 w-full max-w-[200px]"
+            className="flex-1 resize-none overflow-hidden break-words bg-transparent border-none outline-none focus:outline-none focus:ring-0 text-[13px] font-semibold tracking-wide leading-snug text-slate-300 placeholder:text-slate-500"
           />
 
-          <button 
+          <button
             onClick={handleCopy}
-            className="p-1 hover:bg-white/10 rounded transition-colors text-slate-400 hover:text-white"
+            className="mt-0.5 flex-shrink-0 p-1 hover:bg-white/10 rounded transition-colors text-slate-400 hover:text-white"
             title="Copy Code"
           >
             {copied ? <Check className="w-[15px] h-[15px] text-emerald-400" /> : <Copy className="w-[15px] h-[15px] opacity-80" />}
