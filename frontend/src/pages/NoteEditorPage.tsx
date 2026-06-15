@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useBlocker } from 'react-router-dom'
-import { Plus, Type, CheckSquare, ListTodo, ChevronLeft, ChevronRight, Save, Loader2, Trash2, List as ListIcon, Table as TableIcon, LayoutDashboard, LayoutList, GripVertical, MoreVertical, Copy, ClipboardPaste, Download, Code2, Heading, Image as ImageIcon, Timer as TimerIcon } from 'lucide-react'
+import { Plus, Type, CheckSquare, ListTodo, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Save, Loader2, Trash2, List as ListIcon, Table as TableIcon, LayoutDashboard, LayoutList, GripVertical, MoreVertical, Copy, ClipboardPaste, Download, Code2, Heading, Image as ImageIcon, Timer as TimerIcon } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { useReactToPrint } from 'react-to-print'
 import { DndContext, DragOverlay, useDraggable, useDroppable, pointerWithin } from '@dnd-kit/core'
@@ -21,7 +21,7 @@ import { getAuthToken } from '../lib/authToken'
 
 interface SectionData {
   id: number
-  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image'
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image' | 'timer'
   content: string
   // Optional per-block title. null = no title (text/code, or removed); a string (incl. '')
   // = a titled block. See TITLE_BLOCKS for which types show a title by default.
@@ -44,8 +44,8 @@ interface NoteData {
   purpose?: string
 }
 
-const bricolage = "'Bricolage Grotesque', sans-serif"
-const geist = "'Geist', ui-sans-serif, sans-serif"
+const bricolage = "'Quicksand', sans-serif"
+const geist = "'Poppins', ui-sans-serif, sans-serif"
 const mono = "'Geist Mono', monospace"
 
 // Smooth tween for section enter/exit/reorder. A plain duration+ease (not a spring) so
@@ -61,6 +61,14 @@ const BLOCK_DEFS = [
   { type: 'table', title: 'Table', subtitle: 'Resizable grid', icon: TableIcon, accent: '#14B8A6', tint: 'rgba(20,184,166,0.14)' },
   { type: 'code', title: 'Code Block', subtitle: 'Syntax highlighted', icon: Code2, accent: '#5B21B6', tint: 'rgba(91,33,182,0.12)' },
   { type: 'image', title: 'Image', subtitle: 'Drag, drop or browse', icon: ImageIcon, accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
+] as const
+
+// Tools palette. Same shape as BLOCK_DEFS, so each entry is rendered with the same
+// DraggableSidebarItem and drops into the canvas as a block. To add a new tool, add an
+// entry here, a default-content case in addSectionAt, and a BlockRenderer case — the
+// drag/drop layout machinery is already generic over the block `type`.
+const TOOL_DEFS = [
+  { type: 'timer', title: 'Timer', subtitle: 'Countdown + chime', icon: TimerIcon, accent: '#8B5CF6', tint: 'rgba(139,92,246,0.12)' },
 ] as const
 
 // best-effort word count across all section types (strip HTML / JSON wrappers)
@@ -94,6 +102,7 @@ function blockToPlainText(block: CopiedBlock): string {
     else if (block.type === 'list') body = (JSON.parse(block.content).items ?? []).map((i: { text: string }) => `• ${i.text}`).join('\n')
     else if (block.type === 'checklist' || block.type === 'tickbox') body = (JSON.parse(block.content) as Array<{ text: string, checked: boolean }>).map((i) => `${i.checked ? '[x]' : '[ ]'} ${i.text}`).join('\n')
     else if (block.type === 'code') body = JSON.parse(block.content).code ?? ''
+    else if (block.type === 'timer') body = '⏱ Timer'
   } catch { body = block.content }
   return `${titlePrefix}${body}`.trim()
 }
@@ -110,13 +119,16 @@ export function NoteEditorPage() {
   const [isDirty, setIsDirty] = useState(false)
   const [leftOpen, setLeftOpen] = useState(true)
   const [rightOpen, setRightOpen] = useState(true)
-  const [showTimer, setShowTimer] = useState(false)
   const [layoutMode, setLayoutMode] = useState<'vertical' | 'horizontal'>('vertical')
   const [activeDragItem, setActiveDragItem] = useState<any>(null)
   // Seed from the shared localStorage clipboard so a block copied in another note (or
   // before a reload) can be pasted here.
   const [copiedBlock, setCopiedBlock] = useState<CopiedBlock | null>(() => getCopiedBlock())
   const [deletedStack, setDeletedStack] = useState<Array<{ type: string, content: string, rowIndex: number, colIndex: number }>>([])
+  // Drives the corner scroll buttons: "go up" is live only when scrolled down from
+  // the top, "go down" only when there's still page left below.
+  const [atTop, setAtTop] = useState(true)
+  const [atBottom, setAtBottom] = useState(true)
 
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -253,6 +265,7 @@ export function NoteEditorPage() {
     else if (type === 'table') defaultContent = `<table style="width:100%"><tbody><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td><td><p></p></td></tr></tbody></table>`
     else if (type === 'code') defaultContent = JSON.stringify({ language: '', code: '' })
     else if (type === 'image') defaultContent = JSON.stringify({ src: '' })
+    else if (type === 'timer') defaultContent = JSON.stringify({ seconds: 300 })
 
     // A pasted block carries its own title; otherwise title-capable blocks start with an
     // (empty) title shown by default, and other types have none.
@@ -474,6 +487,33 @@ export function NoteEditorPage() {
     if (blocker.state === 'blocked') blocker.reset()
   }
 
+  // Glide to the end / start of the note (the page itself is the scroll container).
+  const scrollToBottom = () => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
+  }
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  // Track whether we're pinned to the top/bottom so each corner button only lights
+  // up when it can actually take you somewhere. Recomputes on scroll, resize, and
+  // whenever the content height changes (blocks added/removed, panels toggled).
+  useEffect(() => {
+    const update = () => {
+      const el = document.documentElement
+      const max = el.scrollHeight - el.clientHeight
+      setAtTop(el.scrollTop <= 1)
+      setAtBottom(el.scrollTop >= max - 1)
+    }
+    update()
+    window.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    return () => {
+      window.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [sections.length, layoutRows.length, isLoading, leftOpen, rightOpen])
+
   const handleDragStart = (e: DragStartEvent) => {
     setActiveDragItem(e.active)
   }
@@ -595,11 +635,6 @@ export function NoteEditorPage() {
               {note ? note.title : 'Loading…'}
               <span className="bg-clip-text text-transparent" style={{ backgroundImage: `linear-gradient(120deg, ${accent.swatch}, #EC4899)` }}>.</span>
             </h1>
-            {showTimer && (
-              <div className="mb-1.5 animate-modal-in sm:ml-4">
-                <NoteTimer accent={accent.swatch} accentTint={accent.tint} onClose={() => setShowTimer(false)} />
-              </div>
-            )}
           </div>
           {note?.purpose && (
             <p className="mt-3.5 max-w-[720px] text-base leading-[1.55] text-[#6E5F7B]">{note.purpose}</p>
@@ -681,16 +716,19 @@ export function NoteEditorPage() {
                 <span className="hidden text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6E5F7B] lg:inline" style={{ fontFamily: mono }}>Tools</span>
                 <TimerIcon className="h-3.5 w-3.5 text-[#F59E0B]" />
               </div>
-              <div className="flex min-h-0 flex-col gap-2 px-1 py-1.5 -mx-1">
-                <ToolCard
-                  icon={TimerIcon}
-                  title="Timer"
-                  subtitle="Countdown + chime"
-                  accent="#8B5CF6"
-                  tint="rgba(139,92,246,0.12)"
-                  active={showTimer}
-                  onClick={() => setShowTimer((v) => !v)}
-                />
+              <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-1 py-1.5 -mx-1">
+                {TOOL_DEFS.map((t) => (
+                  <DraggableSidebarItem
+                    key={t.type}
+                    type={t.type}
+                    title={t.title}
+                    subtitle={t.subtitle}
+                    icon={t.icon}
+                    accent={t.accent}
+                    tint={t.tint}
+                    onClick={() => addSection(t.type)}
+                  />
+                ))}
               </div>
             </div>
             </motion.aside>
@@ -738,6 +776,30 @@ export function NoteEditorPage() {
       >
         {rightOpen ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
       </button>
+
+      {/* Subtle scroll affordances — stacked in the corner (above the right panel
+          toggle on desktop), faint until hovered, and glide smoothly. Each is live
+          only when it can move you: "up" off the top, "down" off the bottom. */}
+      <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-2 md:bottom-[5.25rem] print:hidden">
+        <button
+          onClick={scrollToTop}
+          disabled={atTop}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-[#1B1326]/[0.08] bg-white/90 text-[#6E5F7B] opacity-40 shadow-[0_14px_30px_-12px_rgba(27,19,38,0.4)] backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:text-[#1B1326] hover:opacity-100 disabled:pointer-events-none disabled:opacity-15"
+          aria-label="Scroll to top"
+          title="Scroll to top"
+        >
+          <ChevronUp className="h-5 w-5" />
+        </button>
+        <button
+          onClick={scrollToBottom}
+          disabled={atBottom}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-[#1B1326]/[0.08] bg-white/90 text-[#6E5F7B] opacity-40 shadow-[0_14px_30px_-12px_rgba(27,19,38,0.4)] backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:text-[#1B1326] hover:opacity-100 disabled:pointer-events-none disabled:opacity-15"
+          aria-label="Scroll to bottom"
+          title="Scroll to bottom"
+        >
+          <ChevronDown className="h-5 w-5" />
+        </button>
+      </div>
     </div>
     </DndContext>
   )
@@ -788,7 +850,6 @@ function DroppableCanvas({ contentRef, layoutMode, layoutRows, sections, isLoadi
                                onChange={(content: string) => updateSectionContentLocal(section.id, content)}
                                onTitleChange={(title: string | null) => updateSectionTitleLocal(section.id, title)}
                                onDelete={() => deleteSection(section.id)}
-                               onAddTextBelow={() => addSectionAt('text', section.id, 'bottom')}
                              />
                            </motion.div>
                        )
@@ -880,29 +941,6 @@ function DraggableSidebarItem({ type, title, subtitle, icon: Icon, accent, tint,
   )
 }
 
-// A Tools-panel entry. Same card shell as DraggableSidebarItem (so the two flanking
-// panels read as one system) but a plain toggle button rather than a drag source.
-function ToolCard({ icon: Icon, title, subtitle, accent, tint, active, onClick }: { icon: React.ElementType, title: string, subtitle?: string, accent: string, tint: string, active?: boolean, onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      style={{ ['--card-accent' as string]: accent, background: active ? tint : 'white', borderColor: active ? accent : 'rgba(27,19,38,0.08)' } as React.CSSProperties}
-      className="note-dock-card grid w-full place-items-center grid-cols-1 gap-0 rounded-2xl border p-2.5 text-left lg:grid-cols-[36px_1fr_16px] lg:items-center lg:place-items-stretch lg:gap-2.5 lg:p-3"
-    >
-      <span className="grid h-9 w-9 place-items-center rounded-[10px]" style={{ background: active ? 'white' : tint, color: accent }}>
-        <Icon className="h-[18px] w-[18px]" />
-      </span>
-      <span className="hidden min-w-0 flex-col lg:flex">
-        <span className="text-[13px] font-bold tracking-[-0.005em] text-[#1B1326]">{title}</span>
-        {subtitle && <span className="text-[11px] leading-tight text-[#6E5F7B]">{subtitle}</span>}
-      </span>
-      <span className="hidden h-2 w-2 place-self-center rounded-full transition-colors lg:block" style={{ background: active ? accent : 'rgba(27,19,38,0.15)' }} />
-    </button>
-  )
-}
-
 function UnsavedChangesModal({ isOpen, onSaveAndLeave, onLeave, onCancel }: { isOpen: boolean, onSaveAndLeave: () => void, onLeave: () => void, onCancel: () => void }) {
   if (!isOpen) return null
   return createPortal(
@@ -921,7 +959,7 @@ function UnsavedChangesModal({ isOpen, onSaveAndLeave, onLeave, onCancel }: { is
   )
 }
 
-function BlockWrapper({ section, onChange, onTitleChange, onDelete, activeDragItem, onCopy, onPaste, canPaste, onAddTextBelow }: any) {
+function BlockWrapper({ section, onChange, onTitleChange, onDelete, activeDragItem, onCopy, onPaste, canPaste }: any) {
     const { setNodeRef: setDragRef, attributes, listeners, isDragging } = useDraggable({
         id: `existing-${section.id}`,
         data: { type: section.type, id: section.id, isExisting: true, title: 'Block', icon: GripVertical, colorClass: 'text-slate-500' }
@@ -966,12 +1004,12 @@ function BlockWrapper({ section, onChange, onTitleChange, onDelete, activeDragIt
                <GripVertical className="h-4 w-4" />
             </div>
 
-            <BlockRenderer section={section} onChange={onChange} onTitleChange={onTitleChange} onDelete={onDelete} onCopy={onCopy} onPaste={onPaste} canPaste={canPaste} onAddTextBelow={onAddTextBelow} />
+            <BlockRenderer section={section} onChange={onChange} onTitleChange={onTitleChange} onDelete={onDelete} onCopy={onCopy} onPaste={onPaste} canPaste={canPaste} />
         </div>
     )
 }
 
-function BlockRenderer({ section, onChange, onTitleChange, onDelete, onCopy, onPaste, canPaste, onAddTextBelow }: { section: SectionData, onChange: (c: string) => void, onTitleChange: (t: string | null) => void, onDelete: () => void, onCopy: () => void, onPaste: () => void, canPaste: boolean, onAddTextBelow?: () => void }) {
+function BlockRenderer({ section, onChange, onTitleChange, onDelete, onCopy, onPaste, canPaste }: { section: SectionData, onChange: (c: string) => void, onTitleChange: (t: string | null) => void, onDelete: () => void, onCopy: () => void, onPaste: () => void, canPaste: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const showTitle = blockShowsTitle(section);
@@ -1061,7 +1099,6 @@ function BlockRenderer({ section, onChange, onTitleChange, onDelete, onCopy, onP
           onChange={onChange}
           placeholder="Start typing..."
           className="min-h-[4rem] leading-relaxed text-[#1B1326]"
-          onEnter={onAddTextBelow}
         />
       )}
 
@@ -1083,6 +1120,12 @@ function BlockRenderer({ section, onChange, onTitleChange, onDelete, onCopy, onP
 
       {section.type === 'image' && (
         <ImageBlock content={section.content} onChange={onChange} />
+      )}
+
+      {section.type === 'timer' && (
+        <div className="overflow-x-auto py-1">
+          <NoteTimer accent="var(--accent)" accentTint="var(--accent-tint)" content={section.content} onChange={onChange} />
+        </div>
       )}
     </div>
   )

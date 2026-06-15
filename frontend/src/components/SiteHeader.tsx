@@ -30,7 +30,10 @@ export function SiteHeader({ cta, homeActive = false }: SiteHeaderProps) {
         </span>
       </Link>
 
-      <nav className="hidden rounded-full border border-[rgba(27,19,38,0.08)] bg-white p-1.5 shadow-[0_12px_30px_-18px_rgba(27,19,38,0.18)] lg:flex lg:gap-0.5">
+      <nav
+        data-cursor-block
+        className="hidden rounded-full border border-[rgba(27,19,38,0.08)] bg-white p-1.5 shadow-[0_12px_30px_-18px_rgba(27,19,38,0.18)] lg:flex lg:gap-0.5"
+      >
         {homeActive ? (
           <span className="cursor-default rounded-full bg-[#1B1326] px-[18px] py-2.5 text-sm font-medium text-[#FBF7F2]">
             Home

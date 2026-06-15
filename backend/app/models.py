@@ -39,6 +39,9 @@ class Note(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     purpose = Column(String, nullable=True)
+    # Notes have no color of their own — they always inherit their parent folder's color
+    # (rendered on the frontend). The legacy `notes.color` column, if present from an
+    # earlier build, is intentionally left unmapped and unused.
     folder_id = Column(Integer, ForeignKey("folders.id"))
 
     folder = relationship("Folder", back_populates="notes")

@@ -1,6 +1,4 @@
-/* Google Font – Inter */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
+/* Fonts are loaded in index.html (Poppins, Quicksand, Caveat, Geist Mono). */
 @import "tailwindcss";
 
 @layer base {
@@ -8,14 +6,38 @@
     box-sizing: border-box;
   }
 
+  /* ---- Theme tokens ----
+     The page shells read --bg-primary / --text-primary so switching the
+     data-theme attribute (see lib/theme.tsx) recolors the whole app. Light
+     mirrors the original hardcoded palette so nothing regresses; dark and pink
+     only need to override the page canvas for this sprint. */
+  :root,
+  [data-theme='light'] {
+    --bg-primary: #FBF7F2;
+    --text-primary: #1B1326;
+  }
+
+  [data-theme='dark'] {
+    --bg-primary: #000000;
+    --text-primary: #F4F1EC;
+  }
+
+  [data-theme='pink'] {
+    --bg-primary: #FBE3EE;
+    --text-primary: #1B1326;
+  }
+
   html {
-    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-family: 'Poppins', ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   body {
     margin: 0;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color 0.35s ease, color 0.35s ease;
   }
 
   .ProseMirror h3 {

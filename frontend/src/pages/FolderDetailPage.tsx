@@ -8,8 +8,8 @@ import { getAuthToken } from '../lib/authToken'
 import type { FolderColor, LocalFolder, LocalNote } from '../lib/localWorkspace'
 import { getSwatch } from '../lib/folderColors'
 
-const bricolage = "'Bricolage Grotesque', sans-serif"
-const geist = "'Geist', ui-sans-serif, sans-serif"
+const bricolage = "'Quicksand', sans-serif"
+const geist = "'Poppins', ui-sans-serif, sans-serif"
 const mono = "'Geist Mono', monospace"
 
 /* ---------- inline icons (match the design) ---------- */
@@ -189,7 +189,7 @@ export function FolderDetailPage() {
 
   const isEmpty = notes.length === 0
   const modalInitial: NoteInitial | null = editingNote
-    ? { title: editingNote.title, purpose: editingNote.purpose, color: editingNote.color }
+    ? { title: editingNote.title, purpose: editingNote.purpose }
     : null
 
   if (loaded && !folder) {
@@ -382,7 +382,7 @@ export function FolderDetailPage() {
         <DeleteNoteModal
           title={deletingNote.title}
           purpose={deletingNote.purpose}
-          color={deletingNote.color ?? folder?.color ?? 'violet'}
+          color={folder?.color ?? 'violet'}
           onClose={() => setDeletingNote(null)}
           onConfirm={handleConfirmDelete}
         />
@@ -413,7 +413,7 @@ function NoteCard({
   onEdit: () => void
   onDelete: () => void
 }) {
-  const sw = getSwatch(note.color ?? folderColor)
+  const sw = getSwatch(folderColor)
   const { paper, preview } = noteVisuals(note.id)
   const menuRef = useRef<HTMLDivElement>(null)
 

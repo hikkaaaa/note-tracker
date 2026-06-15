@@ -43,8 +43,7 @@ export interface LocalNote {
   title: string
   purpose?: string
   created_at: string
-  // Optional per-note color. When absent, the UI falls back to the folder color.
-  color?: FolderColor
+  // Notes have no color of their own — they always inherit their parent folder's color.
 }
 
 export interface LocalFolder {
@@ -57,7 +56,7 @@ export interface LocalFolder {
 
 export interface LocalSection {
   id: number
-  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image'
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image' | 'timer'
   content: string
   title?: string | null
 }
@@ -104,7 +103,7 @@ export function clipboardKeyFor(): string {
 }
 
 export interface CopiedBlock {
-  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code'
+  type: 'text' | 'checklist' | 'tickbox' | 'list' | 'table' | 'code' | 'image' | 'timer'
   content: string
   title?: string | null
 }

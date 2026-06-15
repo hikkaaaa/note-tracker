@@ -10,7 +10,7 @@ interface DeleteFolderModalProps {
   onConfirm: () => void
 }
 
-const bricolage = "'Bricolage Grotesque', sans-serif"
+const bricolage = "'Quicksand', sans-serif"
 
 export function DeleteFolderModal({ folder, onClose, onConfirm }: DeleteFolderModalProps) {
   useEffect(() => {
@@ -34,7 +34,7 @@ export function DeleteFolderModal({ folder, onClose, onConfirm }: DeleteFolderMo
         role="alertdialog"
         aria-modal="true"
         className="relative w-full max-w-[480px] overflow-hidden rounded-3xl bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in"
-        style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif", color: '#1B1326' }}
+        style={{ fontFamily: "'Poppins', ui-sans-serif, sans-serif", color: '#1B1326' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#1B1326]/[0.07] px-6 pb-5 pt-[22px]">

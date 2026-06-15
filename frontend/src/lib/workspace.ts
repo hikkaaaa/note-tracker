@@ -21,8 +21,9 @@ interface ApiFolder {
   notes?: ApiNote[]
 }
 
-// The backend has no per-note created_at/color column yet, so notes carry an empty
-// created_at (the UI falls back gracefully) and inherit their folder's color.
+// The backend has no per-note created_at column yet, so notes carry an empty created_at
+// (the UI falls back gracefully). Notes have no color of their own; they inherit their
+// parent folder's color at render time.
 function mapNote(n: ApiNote): LocalNote {
   return { id: n.id, title: n.title, purpose: n.purpose ?? undefined, created_at: '' }
 }

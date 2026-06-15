@@ -13,7 +13,7 @@ import {
   FormHead,
   SocialRow,
 } from '../components/auth'
-import { saveAuth } from '../lib/authToken'
+import { saveAuth, getAuthToken } from '../lib/authToken'
 import { API_BASE } from '../lib/api'
 
 export function LoginPage() {
@@ -35,7 +35,7 @@ export function LoginPage() {
       const res = await fetch(`${API_BASE}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: nickname.trim(), password: pwd }),
+        body: JSON.stringify({ nickname: nickname.trim(), password: pwd, remember }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => null)
@@ -45,7 +45,7 @@ export function LoginPage() {
         return
       }
       const data = await res.json()
-      saveAuth(data.access_token, data.user)
+      saveAuth(data.access_token, data.user, remember)
       setLoading(false)
       setSubmitted(true)
     } catch {
@@ -53,6 +53,12 @@ export function LoginPage() {
       setLoading(false)
     }
   }
+
+  // Already signed in (a remembered 30-day session, or an active tab session)?
+  // Bypass the login screen and drop straight into the workspace.
+  useEffect(() => {
+    if (getAuthToken()) navigate('/dashboard', { replace: true })
+  }, [navigate])
 
   // After the success state shows, continue into the workspace.
   useEffect(() => {

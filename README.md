@@ -25,6 +25,7 @@ export default defineConfig({
 })
 
 
+
 running the back: 
 cd backend
 source venv/bin/activate          # Windows: venv\Scripts\activate  (skip if already active)

@@ -13,7 +13,10 @@ import jwt
 # CHANGE ME in production — set the AUTH_SECRET_KEY env var to a long random value.
 SECRET_KEY = os.environ.get("AUTH_SECRET_KEY", "dev-only-insecure-secret-change-me")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days (default session)
+# "Remember me" sessions get a long-lived token so the login survives browser
+# restarts for a full month on that device (until an explicit logout).
+REMEMBER_ME_EXPIRE_MINUTES = 60 * 24 * 30  # 30 days
 
 
 def hash_password(plain_password: str) -> str:
@@ -35,13 +38,21 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: str | int, extra: dict | None = None) -> str:
-    """Issue a signed JWT whose `sub` claim identifies the user (their id)."""
+def create_access_token(
+    subject: str | int,
+    extra: dict | None = None,
+    expires_minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES,
+) -> str:
+    """Issue a signed JWT whose `sub` claim identifies the user (their id).
+
+    `expires_minutes` lets callers extend the lifetime — e.g. the login route
+    passes REMEMBER_ME_EXPIRE_MINUTES when "Remember me" is checked.
+    """
     now = datetime.now(timezone.utc)
     payload = {
         "sub": str(subject),
         "iat": now,
-        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+        "exp": now + timedelta(minutes=expires_minutes),
     }
     if extra:
         payload.update(extra)

@@ -2,35 +2,16 @@ import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { ArrowRight } from '../components/icons'
 import { SiteHeader } from '../components/SiteHeader'
-
-const pressLogos = [
-  <>
-    The <em className="font-normal italic">Daily</em>
-  </>,
-  <>
-    PRODUCT<b className="font-extrabold">HUNT</b>
-  </>,
-  <>TechCrunch</>,
-  <>
-    FAST<b className="font-extrabold">CO</b>
-  </>,
-  <>WIRED</>,
-  <>The Verge</>,
-]
-
-const serifPress = new Set([0, 3]) // "The Daily" and "FASTCO" use the display face
+import { CursorField } from '../components/CursorField'
 
 export function LandingPage() {
   return (
     <div
-      className="relative min-h-screen overflow-hidden bg-[#FBF7F2] text-[#1B1326] antialiased"
-      style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif" }}
+      className="relative min-h-screen overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)] antialiased"
+      style={{ fontFamily: "'Poppins', ui-sans-serif, sans-serif" }}
     >
-      {/* background halos + grid */}
+      {/* clean copybook grid */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute left-[-120px] top-[8%] h-[560px] w-[560px] rounded-full bg-[rgba(219,62,140,0.18)] blur-[80px]" />
-        <div className="absolute right-[-200px] top-[30%] h-[700px] w-[700px] rounded-full bg-[rgba(119,88,163,0.22)] blur-[80px]" />
-        <div className="absolute bottom-[-180px] left-[40%] h-[480px] w-[480px] rounded-full bg-[rgba(246,196,92,0.18)] blur-[80px]" />
         <div
           className="absolute inset-0 opacity-55"
           style={{
@@ -43,6 +24,9 @@ export function LandingPage() {
         />
       </div>
 
+      {/* cursor-reactive particle trail */}
+      <CursorField />
+
       <div className="relative mx-auto max-w-[1440px] px-5 pb-[60px] pt-7 sm:px-10">
         {/* topbar */}
         <SiteHeader homeActive cta={{ label: 'Log In', to: '/login' }} />
@@ -54,15 +38,9 @@ export function LandingPage() {
           animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
           transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
         >
-          <div className="-mt-[60px] mb-[38px] inline-flex items-center gap-2.5 whitespace-nowrap rounded-full border border-[rgba(27,19,38,0.08)] bg-white py-2 pl-3.5 pr-[18px] text-[13px] font-semibold text-[#7758A3] shadow-[0_8px_24px_-14px_rgba(27,19,38,0.15)]">
-            <span className="h-2 w-2 rounded-full bg-[#DB3E8C] shadow-[0_0_0_4px_rgba(219,62,140,0.18)]" />
-            Everything in its place
-            <ArrowRight size={13} />
-          </div>
-
           <h1
             className="mx-auto max-w-[1100px] text-[clamp(48px,7.2vw,104px)] font-extrabold leading-[0.96] tracking-[-0.035em] text-[#1B1326]"
-            style={{ fontFamily: "'Bricolage Grotesque', sans-serif" }}
+            style={{ fontFamily: "'Quicksand', sans-serif" }}
           >
             <span className="block">
               Welcome to{' '}
@@ -96,27 +74,6 @@ export function LandingPage() {
             </Link>
           </div>
         </motion.main>
-
-        {/* press strip */}
-        <section className="relative z-[2] mt-20 flex flex-col gap-[22px] border-t border-[rgba(27,19,38,0.08)] pt-8">
-          <div
-            className="text-center text-[11px] uppercase tracking-[0.15em] text-[#6E5F7B]"
-            style={{ fontFamily: "'Geist Mono', monospace" }}
-          >
-            As seen in
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-7">
-            {pressLogos.map((content, i) => (
-              <span
-                key={i}
-                className="text-[22px] font-bold tracking-[-0.02em] text-[#1B1326] opacity-55"
-                style={serifPress.has(i) ? { fontFamily: "'Bricolage Grotesque', serif" } : undefined}
-              >
-                {content}
-              </span>
-            ))}
-          </div>
-        </section>
       </div>
     </div>
   )

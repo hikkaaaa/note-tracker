@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { CreateFolderModal } from '../components/CreateFolderModal'
 import type { FormState as FolderFormState } from '../components/CreateFolderModal'
 import { DeleteFolderModal } from '../components/DeleteFolderModal'
-import type { LocalFolder } from '../lib/localWorkspace'
+import type { LocalFolder, LocalNote } from '../lib/localWorkspace'
 import { fetchFolders, createFolder, updateFolder, deleteFolder } from '../lib/workspace'
 import { getAuthToken, getAuthUser } from '../lib/authToken'
+import { getProfile } from '../lib/profile'
 import { getSwatch } from '../lib/folderColors'
 import { NotebookPen } from 'lucide-react'
 
-const bricolage = "'Bricolage Grotesque', sans-serif"
-const geist = "'Geist', ui-sans-serif, sans-serif"
+const bricolage = "'Quicksand', sans-serif"
+const geist = "'Poppins', ui-sans-serif, sans-serif"
 
 /* ---------- inline icons (match the design 1:1) ---------- */
 const PlusIcon = ({ size = 14 }: { size?: number }) => (
@@ -83,9 +84,23 @@ const BellIcon = ({ size = 16 }: { size?: number }) => (
 )
 
 type ViewMode = 'grid' | 'list'
+type Tab = 'folders' | 'all-notes'
 
-const NAV_LINKS = ['Folders', 'All notes', 'Shared', 'Trash']
+// Header nav items. 'Folders' and 'All notes' switch the dashboard view; the rest are
+// not wired up yet.
+const NAV_LINKS: { label: string; tab?: Tab }[] = [
+  { label: 'Folders', tab: 'folders' },
+  { label: 'All notes', tab: 'all-notes' },
+  { label: 'Shared' },
+  { label: 'Trash' },
+]
 const FILTERS = ['All', 'Pinned', 'Recent', 'Shared', 'Archive']
+
+// One note paired with the folder it lives in — the unit rendered in the All Notes grid.
+interface NoteWithFolder {
+  note: LocalNote
+  folder: LocalFolder
+}
 
 export function Dashboard() {
   const navigate = useNavigate()
@@ -93,6 +108,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [q, setQ] = useState('')
+  const [tab, setTab] = useState<Tab>('folders')
   const [view, setView] = useState<ViewMode>('grid')
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false)
   const [editingFolder, setEditingFolder] = useState<LocalFolder | null>(null)
@@ -100,6 +116,7 @@ export function Dashboard() {
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
 
   const authUser = getAuthUser()
+  const avatar = getProfile().avatar
 
   // Gate the dashboard behind a session: no token → straight to login.
   useEffect(() => {
@@ -128,6 +145,25 @@ export function Dashboard() {
   }, [folders, q])
 
   const totalNotes = folders.reduce((sum, folder) => sum + folder.notes.length, 0)
+
+  // Flat list of every note across all folders, each tagged with its origin folder —
+  // backs the "All notes" view. fetchFolders already returns notes nested per folder,
+  // so no extra request is needed.
+  const allNotes = useMemo<NoteWithFolder[]>(
+    () => folders.flatMap((folder) => folder.notes.map((note) => ({ note, folder }))),
+    [folders],
+  )
+
+  const filteredNotes = useMemo(() => {
+    const k = q.trim().toLowerCase()
+    if (!k) return allNotes
+    return allNotes.filter(
+      ({ note, folder }) =>
+        note.title.toLowerCase().includes(k) ||
+        (note.purpose ?? '').toLowerCase().includes(k) ||
+        folder.name.toLowerCase().includes(k),
+    )
+  }, [allNotes, q])
 
   const openCreateFolder = () => {
     setEditingFolder(null)
@@ -173,7 +209,7 @@ export function Dashboard() {
   return (
     <div
       className="relative min-h-screen overflow-x-hidden"
-      style={{ background: '#FBF7F2', color: '#1B1326', fontFamily: geist }}
+      style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)', fontFamily: geist }}
     >
       {/* background halos + grid */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
@@ -209,19 +245,23 @@ export function Dashboard() {
           </a>
 
           <nav className="hidden gap-0.5 rounded-full border border-[#1B1326]/[0.08] bg-white p-1.5 shadow-[0_12px_30px_-18px_rgba(27,19,38,0.18)] md:flex">
-            {NAV_LINKS.map((link) => (
-              <a
-                key={link}
-                href="#"
-                className={`rounded-full px-[18px] py-2.5 text-sm font-medium no-underline transition-colors ${
-                  link === 'Folders'
-                    ? 'bg-[#1B1326] text-[#FBF7F2]'
-                    : 'text-[#1B1326] hover:bg-[#7758A3]/[0.08]'
-                }`}
-              >
-                {link}
-              </a>
-            ))}
+            {NAV_LINKS.map((link) => {
+              const active = link.tab != null && link.tab === tab
+              return (
+                <button
+                  key={link.label}
+                  type="button"
+                  onClick={() => link.tab && setTab(link.tab)}
+                  className={`rounded-full px-[18px] py-2.5 text-sm font-medium transition-colors ${
+                    active
+                      ? 'bg-[#1B1326] text-[#FBF7F2]'
+                      : 'text-[#1B1326] hover:bg-[#7758A3]/[0.08]'
+                  }`}
+                >
+                  {link.label}
+                </button>
+              )
+            })}
           </nav>
 
           <div className="flex items-center gap-2.5 justify-self-end">
@@ -233,19 +273,28 @@ export function Dashboard() {
               <BellIcon />
               <span className="absolute right-[11px] top-[9px] h-2 w-2 rounded-full bg-[#EC4899] ring-2 ring-white" />
             </button>
-            <a
-              href="#"
+            <Link
+              to="/profile"
+              aria-label="Open your profile and settings"
               className="inline-flex items-center gap-2.5 rounded-full border border-[#1B1326]/[0.08] bg-white py-[5px] pl-[5px] pr-4 text-sm font-semibold no-underline shadow-[0_8px_22px_-16px_rgba(27,19,38,0.2)] transition-transform hover:-translate-y-px"
               style={{ color: '#1B1326' }}
             >
-              <span
-                className="grid h-8 w-8 place-items-center rounded-full text-[13px] font-bold text-white"
-                style={{ background: 'linear-gradient(135deg, #8B5CF6, #EC4899)', fontFamily: bricolage }}
-              >
-                {(authUser?.nickname?.[0] ?? '?').toUpperCase()}
-              </span>
+              {avatar ? (
+                <img
+                  src={avatar}
+                  alt=""
+                  className="h-8 w-8 rounded-full object-cover"
+                />
+              ) : (
+                <span
+                  className="grid h-8 w-8 place-items-center rounded-full text-[13px] font-bold text-white"
+                  style={{ background: 'linear-gradient(135deg, #8B5CF6, #EC4899)', fontFamily: bricolage }}
+                >
+                  {(authUser?.nickname?.[0] ?? '?').toUpperCase()}
+                </span>
+              )}
               <span className="hidden sm:inline">{authUser?.nickname ?? 'Account'}</span>
-            </a>
+            </Link>
           </div>
         </header>
 
@@ -256,7 +305,7 @@ export function Dashboard() {
               className="m-0 font-extrabold leading-[1.05] tracking-[-0.035em]"
               style={{ fontFamily: bricolage, fontSize: 'clamp(40px, 6.4vw, 84px)' }}
             >
-              My Folders
+              {tab === 'all-notes' ? 'All Notes' : 'My Folders'}
               <span
                 className="inline-block bg-clip-text text-transparent"
                 style={{ backgroundImage: 'linear-gradient(120deg, #8B5CF6, #EC4899)' }}
@@ -265,9 +314,18 @@ export function Dashboard() {
               </span>
             </h1>
             <p className="mt-[18px] text-sm tracking-[-0.005em] text-[#6E5F7B]" style={{ fontFamily: "'Geist Mono', monospace" }}>
-              <b className="font-semibold text-[#1B1326]">{folders.length}</b> folder{folders.length !== 1 ? 's' : ''}
-              <span className="mx-3 inline-block h-1 w-1 -translate-y-px rounded-full bg-[#6E5F7B] opacity-50 align-middle" />
-              <b className="font-semibold text-[#1B1326]">{totalNotes}</b> note{totalNotes !== 1 ? 's' : ''}
+              {tab === 'all-notes' ? (
+                <>
+                  <b className="font-semibold text-[#1B1326]">{totalNotes}</b> note{totalNotes !== 1 ? 's' : ''} across{' '}
+                  <b className="font-semibold text-[#1B1326]">{folders.length}</b> folder{folders.length !== 1 ? 's' : ''}
+                </>
+              ) : (
+                <>
+                  <b className="font-semibold text-[#1B1326]">{folders.length}</b> folder{folders.length !== 1 ? 's' : ''}
+                  <span className="mx-3 inline-block h-1 w-1 -translate-y-px rounded-full bg-[#6E5F7B] opacity-50 align-middle" />
+                  <b className="font-semibold text-[#1B1326]">{totalNotes}</b> note{totalNotes !== 1 ? 's' : ''}
+                </>
+              )}
             </p>
           </div>
 
@@ -358,7 +416,7 @@ export function Dashboard() {
         )}
 
         {/* folder grid / list */}
-        {!loading && (
+        {!loading && tab === 'folders' && (
         <main
           className={
             view === 'grid'
@@ -389,7 +447,7 @@ export function Dashboard() {
         </main>
         )}
 
-        {!loading && filtered.length === 0 && q.trim() && (
+        {!loading && tab === 'folders' && filtered.length === 0 && q.trim() && (
           <div className="relative z-[2] py-[60px] text-center text-[#6E5F7B]">
             <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-[18px] border border-[#1B1326]/[0.08] bg-white">
               <FolderGlyph size={28} color="#8B5CF6" />
@@ -398,6 +456,40 @@ export function Dashboard() {
               No folders match "<b className="text-[#1B1326]">{q}</b>". Try a different search.
             </p>
           </div>
+        )}
+
+        {/* All-notes grid — every note across folders, tagged with its origin color */}
+        {!loading && tab === 'all-notes' && (
+          filteredNotes.length === 0 ? (
+            <div className="relative z-[2] py-[60px] text-center text-[#6E5F7B]">
+              <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-[18px] border border-[#1B1326]/[0.08] bg-white">
+                <FolderGlyph size={28} color="#8B5CF6" />
+              </div>
+              <p>
+                {q.trim()
+                  ? <>No notes match "<b className="text-[#1B1326]">{q}</b>". Try a different search.</>
+                  : 'No notes yet. Open a folder to create your first note.'}
+              </p>
+            </div>
+          ) : (
+            <main
+              className={
+                view === 'grid'
+                  ? 'relative z-[2] grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+                  : 'relative z-[2] flex flex-col gap-2.5'
+              }
+            >
+              {filteredNotes.map(({ note, folder }) => (
+                <AllNoteCard
+                  key={note.id}
+                  note={note}
+                  folder={folder}
+                  view={view}
+                  onOpen={() => navigate(`/notes/${note.id}`)}
+                />
+              ))}
+            </main>
+          )
         )}
       </div>
 
@@ -609,5 +701,67 @@ function NewFolderTile({ view, onClick }: { view: ViewMode; onClick: () => void 
         </span>
       </div>
     </button>
+  )
+}
+
+/* ---------- all-notes card ----------
+   A note shown in the global "All notes" grid. It inherits its parent folder's color
+   (spine + tint wash + chip) so its origin is obvious at a glance among mixed folders. */
+function AllNoteCard({
+  note,
+  folder,
+  view,
+  onOpen,
+}: {
+  note: LocalNote
+  folder: LocalFolder
+  view: ViewMode
+  onOpen: () => void
+}) {
+  const sw = getSwatch(folder.color)
+
+  const folderChip = (
+    <span
+      className="inline-flex max-w-full items-center gap-1.5 truncate rounded-full px-2.5 py-1 text-[11px] font-bold"
+      style={{ background: sw.tint, color: sw.swatch }}
+    >
+      <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: sw.swatch }} />
+      <span className="truncate">{folder.name}</span>
+    </span>
+  )
+
+  if (view === 'list') {
+    return (
+      <article
+        onClick={onOpen}
+        className="relative flex min-h-[68px] w-full cursor-pointer items-center gap-4 overflow-hidden rounded-[16px] border border-[#1B1326]/[0.08] bg-white px-5 py-3.5 shadow-[0_1px_0_rgba(27,19,38,0.04),0_10px_24px_-14px_rgba(27,19,38,0.12)] transition-transform hover:-translate-y-px"
+      >
+        <span className="absolute bottom-0 left-0 top-0 w-[5px]" style={{ background: sw.swatch }} />
+        <h3 className="m-0 ml-1 max-w-[45%] truncate text-[17px] font-extrabold tracking-[-0.02em]" style={{ fontFamily: bricolage }}>
+          {note.title || 'Untitled'}
+        </h3>
+        <p className="m-0 hidden min-w-0 flex-1 truncate text-[13px] font-medium text-[#6E5F7B] sm:block">{note.purpose || '—'}</p>
+        <span className="ml-auto flex-shrink-0">{folderChip}</span>
+      </article>
+    )
+  }
+
+  return (
+    <article
+      onClick={onOpen}
+      className="group relative flex h-[180px] cursor-pointer flex-col overflow-hidden rounded-[18px] border border-[#1B1326]/[0.08] bg-white shadow-[0_1px_0_rgba(27,19,38,0.04),0_10px_24px_-14px_rgba(27,19,38,0.10)] transition-transform hover:-translate-y-1"
+    >
+      {/* color spine + soft tint wash, both from the parent folder */}
+      <span className="absolute bottom-0 left-0 top-0 z-[1] w-[5px]" style={{ background: sw.swatch }} />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-16" style={{ background: `linear-gradient(to bottom, ${sw.tint}, transparent)` }} />
+
+      <div className="relative z-[1] flex flex-1 flex-col p-5 pl-[22px]">
+        <span className="self-start">{folderChip}</span>
+        <h3 className="m-0 mt-3 truncate text-[19px] font-extrabold leading-[1.15] tracking-[-0.025em]" style={{ fontFamily: bricolage }}>
+          {note.title || 'Untitled'}
+        </h3>
+        <p className="m-0 mt-auto truncate pt-3 text-[13px] font-medium text-[#6E5F7B]">{note.purpose || '—'}</p>
+      </div>
+    </article>
   )
 }

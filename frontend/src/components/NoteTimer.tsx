@@ -39,16 +39,42 @@ function secondsToDigits(total: number): string {
  * ship — the AudioContext is created on the play tap (a user gesture) so the end-of-
  * countdown sound is allowed to play even though it fires later.
  */
+// Read a persisted duration (seconds) out of a block's content JSON, if any.
+function secondsFromContent(content?: string): number {
+  if (!content) return 0
+  try {
+    const n = Number(JSON.parse(content)?.seconds)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  } catch {
+    return 0
+  }
+}
+
 export function NoteTimer({
   accent,
   accentTint,
   onClose,
+  content,
+  onChange,
 }: {
   accent: string
   accentTint: string
-  onClose: () => void
+  // Optional: when omitted (e.g. embedded as a note block, deleted via the block menu)
+  // the close button is hidden.
+  onClose?: () => void
+  // Optional persistence hooks. As a note block, the configured duration is seeded from
+  // `content` and written back through `onChange` so it survives reloads. Each block
+  // instance owns its own React state, so multiple timers never share a countdown.
+  content?: string
+  onChange?: (content: string) => void
 }) {
-  const [digits, setDigits] = useState('500') // default 5:00
+  const [digits, setDigits] = useState(() => {
+    const secs = secondsFromContent(content)
+    return secs > 0 ? secondsToDigits(secs) : '500' // default 5:00
+  })
+
+  // Persist a committed duration (in seconds) back to the block content, if wired up.
+  const persistSeconds = (secs: number) => onChange?.(JSON.stringify({ seconds: secs }))
   const [remaining, setRemaining] = useState(0)
   const [running, setRunning] = useState(false)
   const [editing, setEditing] = useState(true)
@@ -115,6 +141,7 @@ export function NoteTimer({
   const start = () => {
     const secs = editing ? digitsToSeconds(digits) : remaining
     if (secs <= 0) return
+    persistSeconds(secs)
     ensureAudio() // unlock audio within this user gesture
     setRemaining(secs)
     endAtRef.current = Date.now() + secs * 1000
@@ -137,6 +164,7 @@ export function NoteTimer({
 
   const bump = (delta: number) => {
     const base = editing ? digitsToSeconds(digits) : remaining
+    persistSeconds(base + delta)
     setDigits(secondsToDigits(base + delta))
     setRunning(false)
     setFinished(false)
@@ -243,13 +271,15 @@ export function NoteTimer({
         </div>
       )}
 
-      <button
-        onClick={onClose}
-        aria-label="Close timer"
-        className="ml-0.5 grid h-8 w-8 place-items-center rounded-xl text-[#6E5F7B] transition-colors hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326]"
-      >
-        <X className="h-[15px] w-[15px]" />
-      </button>
+      {onClose && (
+        <button
+          onClick={onClose}
+          aria-label="Close timer"
+          className="ml-0.5 grid h-8 w-8 place-items-center rounded-xl text-[#6E5F7B] transition-colors hover:bg-[#1B1326]/[0.06] hover:text-[#1B1326]"
+        >
+          <X className="h-[15px] w-[15px]" />
+        </button>
+      )}
     </div>
   )
 }

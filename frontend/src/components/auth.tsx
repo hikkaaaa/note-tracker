@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import type { ReactNode } from 'react'
 import { SiteHeader } from './SiteHeader'
+import { CursorField } from './CursorField'
 
 /* Shared building blocks for the Bloom-palette auth pages (Log In / Sign Up). */
 
@@ -51,13 +52,10 @@ function GitHubG() {
 export const authInputClass =
   'w-full rounded-xl border-[1.5px] border-[rgba(27,19,38,0.08)] bg-[#FBF7F2] px-4 py-3.5 text-[15px] text-[#1B1326] outline-none transition-all placeholder:text-[#6E5F7B]/60 focus:border-[#7758A3] focus:bg-white focus:ring-4 focus:ring-[#7758A3]/15'
 
-/** The fixed background halos + masked grid used across the Bloom auth pages. */
+/** The fixed masked copybook grid used across the Bloom auth pages. */
 export function BloomBackdrop() {
   return (
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-      <div className="absolute left-[-160px] top-[-120px] h-[600px] w-[600px] rounded-full bg-[rgba(219,62,140,0.16)] blur-[90px]" />
-      <div className="absolute right-[-240px] top-[20%] h-[720px] w-[720px] rounded-full bg-[rgba(119,88,163,0.22)] blur-[90px]" />
-      <div className="absolute bottom-[-200px] left-[30%] h-[500px] w-[500px] rounded-full bg-[rgba(246,196,92,0.18)] blur-[90px]" />
       <div
         className="absolute inset-0 opacity-50"
         style={{
@@ -84,10 +82,11 @@ interface AuthLayoutProps {
 export function AuthLayout({ cta, columnWidth = 440, children }: AuthLayoutProps) {
   return (
     <div
-      className="relative min-h-screen overflow-hidden bg-[#FBF7F2] text-[#1B1326] antialiased"
-      style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif" }}
+      className="relative min-h-screen overflow-hidden bg-[var(--bg-primary)] text-[var(--text-primary)] antialiased"
+      style={{ fontFamily: "'Poppins', ui-sans-serif, sans-serif" }}
     >
       <BloomBackdrop />
+      <CursorField />
 
       <div className="relative mx-auto max-w-[1440px] px-5 pb-[50px] pt-7 sm:px-10">
         <SiteHeader cta={cta} />
@@ -110,7 +109,10 @@ export function AuthLayout({ cta, columnWidth = 440, children }: AuthLayoutProps
 /** White form card with the soft gradient glow. */
 export function FormCard({ children }: { children: ReactNode }) {
   return (
-    <div className="relative rounded-[24px] border border-[rgba(27,19,38,0.08)] bg-white p-9 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_30px_60px_-28px_rgba(119,88,163,0.35),0_8px_20px_-10px_rgba(27,19,38,0.12)]">
+    <div
+      data-cursor-block
+      className="relative rounded-[24px] border border-[rgba(27,19,38,0.08)] bg-white p-9 shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_30px_60px_-28px_rgba(119,88,163,0.35),0_8px_20px_-10px_rgba(27,19,38,0.12)]"
+    >
       <div
         aria-hidden="true"
         className="absolute inset-[-1px] -z-10 rounded-[25px] opacity-60 blur-[12px]"
@@ -130,7 +132,7 @@ export function FormHead({ title, subtitle, titleSize = 32 }: { title: string; s
     <div className="mb-6 text-center">
       <h2
         className="m-0 mb-1.5 font-extrabold leading-tight tracking-[-0.03em]"
-        style={{ fontFamily: "'Bricolage Grotesque', sans-serif", fontSize: titleSize }}
+        style={{ fontFamily: "'Quicksand', sans-serif", fontSize: titleSize }}
       >
         {title}
       </h2>
@@ -215,7 +217,7 @@ export function AuthSuccess({ title, subtitle }: { title: string; subtitle: stri
       </motion.div>
       <h3
         className="m-0 mt-1 text-[28px] font-extrabold tracking-[-0.02em]"
-        style={{ fontFamily: "'Bricolage Grotesque', sans-serif" }}
+        style={{ fontFamily: "'Quicksand', sans-serif" }}
       >
         {title}
       </h3>

@@ -11,6 +11,9 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     nickname: str
     password: str
+    # When true the client wants a long-lived (30-day) session that survives
+    # browser restarts; otherwise the default session lifetime applies.
+    remember: bool = False
 
 class UserResponse(BaseModel):
     id: int

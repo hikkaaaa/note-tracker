@@ -76,7 +76,8 @@ export function SignupPage() {
       }
 
       const data = await res.json()
-      saveAuth(data.access_token, data.user)
+      // A new account is kept signed in across restarts by default.
+      saveAuth(data.access_token, data.user, true)
       // A fresh account simply has no folders on the backend yet, so the dashboard loads
       // empty on its own — no local wipe needed (and none that could clobber another
       // account's data on this browser).

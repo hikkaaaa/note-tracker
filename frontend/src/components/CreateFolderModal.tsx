@@ -20,7 +20,7 @@ export interface FormState {
 const NAME_CHAR_LIMIT = 40
 const DESC_CHAR_LIMIT = 120
 
-const bricolage = "'Bricolage Grotesque', sans-serif"
+const bricolage = "'Quicksand', sans-serif"
 
 export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initialFolder }: CreateFolderModalProps) {
   const [form, setForm] = useState<FormState>({ name: '', purpose: '', color: 'violet' })
@@ -90,7 +90,7 @@ export function CreateFolderModal({ isOpen, onClose, onSubmit, onSuccess, initia
         aria-modal="true"
         aria-labelledby="modal-title"
         className="relative max-h-[calc(100vh-48px)] w-full max-w-[560px] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in"
-        style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif", color: '#1B1326' }}
+        style={{ fontFamily: "'Poppins', ui-sans-serif, sans-serif", color: '#1B1326' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#1B1326]/[0.07] px-6 pb-5 pt-[22px]">

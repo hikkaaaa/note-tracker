@@ -1,18 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { X, NotebookPen } from 'lucide-react'
 import type { FolderColor } from '../lib/localWorkspace'
-import { COLOR_ORDER, FOLDER_SWATCHES, getSwatch } from '../lib/folderColors'
+import { getSwatch } from '../lib/folderColors'
 
 export interface FormState {
   name: string
   purpose: string
-  color: FolderColor
 }
 
 export interface NoteInitial {
   title: string
   purpose?: string
-  color?: FolderColor
 }
 
 interface CreateNoteModalProps {
@@ -26,7 +24,7 @@ interface CreateNoteModalProps {
 
 const NAME_LIMIT = 60
 const PURPOSE_LIMIT = 140
-const bricolage = "'Bricolage Grotesque', sans-serif"
+const bricolage = "'Quicksand', sans-serif"
 
 export function CreateNoteModal({
   isOpen,
@@ -39,7 +37,6 @@ export function CreateNoteModal({
   const isEdit = Boolean(initialNote)
   const [name, setName] = useState('')
   const [purpose, setPurpose] = useState('')
-  const [color, setColor] = useState<FolderColor>(folderColor)
   const [error, setError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
 
@@ -47,10 +44,9 @@ export function CreateNoteModal({
     if (!isOpen) return
     setName(initialNote?.title ?? '')
     setPurpose(initialNote?.purpose && initialNote.purpose !== '—' ? initialNote.purpose : '')
-    setColor(initialNote?.color ?? folderColor)
     setError(null)
     setTimeout(() => nameRef.current?.focus(), 50)
-  }, [isOpen, initialNote, folderColor])
+  }, [isOpen, initialNote])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,7 +59,6 @@ export function CreateNoteModal({
   if (!isOpen) return null
 
   const folderSw = getSwatch(folderColor)
-  const selected = getSwatch(color)
   const purposeChars = purpose.length
   const overLimit = purposeChars > PURPOSE_LIMIT
   const canSubmit = name.trim().length > 0 && !overLimit
@@ -74,7 +69,7 @@ export function CreateNoteModal({
       setError('Note name is required.')
       return
     }
-    onSubmit({ name: name.trim(), purpose: purpose.trim(), color })
+    onSubmit({ name: name.trim(), purpose: purpose.trim() })
     onClose()
   }
 
@@ -91,7 +86,7 @@ export function CreateNoteModal({
         aria-modal="true"
         aria-labelledby="new-note-title"
         className="relative max-h-[calc(100vh-48px)] w-full max-w-[560px] overflow-y-auto rounded-3xl bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,0.35)] animate-modal-in"
-        style={{ fontFamily: "'Geist', ui-sans-serif, sans-serif", color: '#1B1326', ['--accent' as string]: folderSw.swatch, ['--accent-tint' as string]: folderSw.tint } as React.CSSProperties}
+        style={{ fontFamily: "'Poppins', ui-sans-serif, sans-serif", color: '#1B1326', ['--accent' as string]: folderSw.swatch, ['--accent-tint' as string]: folderSw.tint } as React.CSSProperties}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#1B1326]/[0.07] px-6 pb-5 pt-[22px]">
@@ -165,37 +160,6 @@ export function CreateNoteModal({
             />
           </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <label className="text-[15px] font-bold tracking-[-0.01em]">Note Color</label>
-              <span className="font-mono text-[11px] text-[#6E5F7B]">{selected.label}</span>
-            </div>
-            <div className="flex flex-wrap gap-3" role="radiogroup" aria-label="Note color">
-              {COLOR_ORDER.map((id) => {
-                const sw = FOLDER_SWATCHES[id]
-                const on = color === id
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    aria-label={sw.label}
-                    title={sw.label}
-                    onClick={() => setColor(id)}
-                    className={`h-9 w-9 rounded-full border-[3px] border-white p-0 transition-transform ${on ? '' : 'hover:scale-110'}`}
-                    style={{
-                      backgroundColor: sw.swatch,
-                      outline: on ? `2px solid ${sw.swatch}` : '2px solid transparent',
-                      outlineOffset: '2px',
-                      boxShadow: on ? `0 4px 10px -2px ${sw.swatch}` : '0 1px 3px rgba(15,23,42,0.10)',
-                    }}
-                  />
-                )
-              })}
-            </div>
-          </div>
-
           {error && (
             <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-500">{error}</p>
           )}
@@ -214,8 +178,8 @@ export function CreateNoteModal({
               disabled={!canSubmit}
               className="rounded-xl px-[22px] py-[11px] text-sm font-bold text-white transition-transform hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-50"
               style={{
-                background: selected.swatch,
-                boxShadow: canSubmit ? `0 8px 16px -6px ${selected.swatch}80` : 'none',
+                background: folderSw.swatch,
+                boxShadow: canSubmit ? `0 8px 16px -6px ${folderSw.swatch}80` : 'none',
               }}
             >
               {isEdit ? 'Save Changes' : 'Create Note'}

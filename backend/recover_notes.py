@@ -12,8 +12,10 @@ import html
 import sqlite3
 import os
 
-DB = os.path.expanduser("~/Desktop/note-tracker/backend/note_tracker.db")
-OUT = os.path.expanduser("~/Desktop/note-tracker/recovered")
+# Resolve paths relative to this script so they survive the project moving.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DB = os.path.join(_HERE, "note_tracker.db")
+OUT = os.path.join(_HERE, "..", "recovered")
 USER_ID = 1  # hixie_owner
 
 # (orphan note_id, new note title, folder name, folder purpose, folder color)

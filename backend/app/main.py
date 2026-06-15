@@ -162,7 +162,12 @@ def login(payload: schemas.UserLogin, db: Session = Depends(get_db)):
     if user is None or not auth.verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect nickname or password.")
 
-    token = auth.create_access_token(user.id)
+    expires = (
+        auth.REMEMBER_ME_EXPIRE_MINUTES
+        if payload.remember
+        else auth.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+    token = auth.create_access_token(user.id, expires_minutes=expires)
     return schemas.TokenResponse(access_token=token, user=user)
 
 
